@@ -306,7 +306,9 @@ function saveApp({ slug, name, html, tokens, secs, mode }) {
 // ---------- 生成会话：带自动续写与自动修复的流水线 ----------
 function makeSession(req, res) {
   const s = { aborted: false, current: null, totalTokens: 0 };
-  req.on('close', () => { s.aborted = true; s.current?.destroy(); });
+  // 断开检测必须挂在 res 上：Node 15+ 的 req(IncomingMessage) close 在「消息体读完」就触发——
+  // GET 没人读 body 侥幸无感，POST（修复）读完 body 即触发，曾导致修复一启动就自杀且永久沉默
+  res.on('close', () => { if (!res.writableEnded) { s.aborted = true; s.current?.destroy(); } });
   s.step = opts => new Promise((resolve, reject) => {
     if (s.aborted) return reject(new Error('aborted'));
     s.current = anthropicCall(opts, (err, r) => {
@@ -439,7 +441,8 @@ function buildModifyTask(appName, instruction) {
 // 慢轨 / 修改共用：订阅事件→发任务→读产物→落盘
 async function runAgent(req, res, { q, slug, started, taskText, sessionTitle, preflight }) {
   let sid = null, stopEvents = null, done = false;
-  req.on('close', () => { try { stopEvents?.(); } catch {} });
+  // 同 makeSession：POST(modify) 的 req close 在读完 body 即触发，会立刻掐断事件直播；用 res close 才是真断开
+  res.on('close', () => { if (!res.writableEnded) try { stopEvents?.(); } catch {} });
   try {
   await agentGate.run(async () => {
     try {
@@ -533,11 +536,12 @@ function generateDeep(req, res, { q, slug }) {
   })();
 }
 
-// 运行时崩溃修复：POST {name, html, error} → 修复流
+// 运行时崩溃修复：POST {name, html, error} → 修复流。与快轨同走 genGate（修复也烧上游并发）
 function repairApp(req, res, { name, html, error }) {
   const started = Date.now();
   const s = makeSession(req, res);
-  (async () => {
+  genGate.run(async () => {
+    if (s.aborted || res.writableEnded) return;   // 排队期间已断开
     try {
       sse(res, 'stage', { name: 'fix', label: '正在修复问题' });
       const fix = await s.step({
@@ -550,7 +554,12 @@ function repairApp(req, res, { name, html, error }) {
     } catch (e) {
       if (!s.aborted) { try { sse(res, 'error', { message: e.message }); res.end(); } catch {} }
     }
-  })();
+  }).catch(e => {
+    if (e && e.busy && !res.writableEnded) {
+      logActivity('busy', { q: String(name || '').slice(0, 80) });
+      try { sse(res, 'error', { message: '当前使用人数较多，请稍后再试。' }); res.end(); } catch {}
+    }
+  });
 }
 
 // ---------- 应用缓存检索 ----------

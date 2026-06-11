@@ -28,6 +28,7 @@
 appId 命名空间：dock=`app:<id>`，搜索=slug，浏览器=`web:<djb2>`。
 
 ⚠️ 实测坑（2026-06-11）：
+- **req close ≠ 客户端断开（2026-06-12 事故）**：Node 15+ `IncomingMessage` 的 `close` 在**消息体读完**就触发。GET 没人消费 body 侥幸无感；POST（/api/repair）读完 body 即触发 → `makeSession` 误判断开自杀（掐上游、catch 因 aborted 静默、不发 done/error）→ **修复功能自上线起 100% 卡死且零日志**。断开检测一律挂 `res.on('close')` + `!res.writableEnded`。修复同时补了 genGate（修复曾绕过并发闸）。教训：每条对外链路上线时都要端到端冒烟，"代码看起来对"不算
 - **.env 加载顺序（2026-06-12 事故）**：ES import 全部提升到模块体之前求值——lib 在模块层读 `process.env`（如 opencode.mjs 的 OC_*）时 .env 还没注入，永远拿默认值。OC_PROVIDER 默认名一改慢轨全断（之前 default==实际值纯属侥幸）。修复：`server/lib/env.mjs` 作为 index.mjs **第一个 import**
 - Node 20+ `autoSelectFamily` 以 `all:true` 调自定义 lookup，须返回数组（已修）
 - Spotlight"获取/完整版"路径必须传 `/api/search` 返回的 slug，否则 appId 为空、桥不接线（已修）
