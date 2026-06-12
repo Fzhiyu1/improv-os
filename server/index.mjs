@@ -152,6 +152,8 @@ input:focus,select:focus,textarea:focus{border-color:var(--blue);box-shadow:0 0 
 <script id="__ime">/* 输入法守卫：中文选词的回车（含 Safari compositionend 先于 keydown 的怪癖）不传给应用 */
 (function(){var t=0;addEventListener('compositionend',function(){t=Date.now()},true);
 addEventListener('keydown',function(e){if(e.key==='Enter'&&(e.isComposing||e.keyCode===229||Date.now()-t<100))e.stopImmediatePropagation()},true)})();<\/script>
+<script id="__ls">/* 沙箱 iframe 无 allow-same-origin 时 localStorage 直接抛 SecurityError——换成内存垫片，应用代码无感知（跨会话记忆请用 os.store） */
+(function(){try{localStorage.length}catch(e){var m={};var shim={getItem:function(k){return k in m?m[k]:null},setItem:function(k,v){m[k]=String(v)},removeItem:function(k){delete m[k]},clear:function(){m={}},key:function(i){return Object.keys(m)[i]||null},get length(){return Object.keys(m).length}};try{Object.defineProperty(window,'localStorage',{value:shim});Object.defineProperty(window,'sessionStorage',{value:shim})}catch(_){}}})();<\/script>
 <script>
 (function(){
   var seq=0, waiting={}, appId=null, queued=[];
@@ -211,7 +213,7 @@ const SYSTEM_PROMPT = `你是 macOS 系统应用的开发者。用户在 macOS �
    - await os.ai.ask(prompt) → AI 文本应答。用于翻译、总结、问答、文案生成等需要真智能的功能。
    - await os.http.get(url) → {status, contentType, body}，真实公网数据（只读 GET，无法访问内网）。用于天气、汇率、新闻等需要真数据的功能，选公开免 key 的数据源（天气用 https://wttr.in/城市拼音?format=j1 ，汇率用 https://api.exchangerate-api.com/v4/latest/USD ，技术新闻用 https://hacker-news.firebaseio.com/v0/ ）。body 是字符串，JSON 需自行 JSON.parse 并兜底。
    - await os.store.get(key) / os.store.set(key, value) / os.store.keys() / os.store.del(key) → 跨会话持久化（同名应用所有用户共享同一份数据，单条 64KB 上限）。用于待办、笔记、留言板、计数器等需要记住的功能。
-   纯展示类应用（计算器、时钟等）不必使用这些 API。绝不向用户暴露这些 API 的存在或解释其实现。`;
+   纯展示类应用（计算器、时钟等）不必使用这些 API。绝不向用户暴露这些 API 的存在或解释其实现。沙箱内 localStorage 只在当前会话有效（刷新即失），任何需要记住的数据一律用 os.store。`;
 
 const BROWSER_PROMPT = `你是一个网页渲染引擎。用户在浏览器中访问一个网址或搜索词，你负责输出该网页。
 
@@ -818,11 +820,15 @@ const server = http.createServer((req, res) => {
     if (!fs.existsSync(f)) return json(res, 404, { error: 'not found' });
     try { const m = JSON.parse(fs.readFileSync(path.join(dir, 'meta.json'), 'utf8')); m.opens = (m.opens || 0) + 1; fs.writeFileSync(path.join(dir, 'meta.json'), JSON.stringify(m, null, 2)); } catch {}
     res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
-    // 存量应用在落盘时还没有输入法守卫，出口处补注（新应用已含 __ime，跳过）
+    // 存量应用在落盘时还没有输入法守卫/localStorage 垫片，出口处补注（新应用已含，跳过）
     let appHtml = fs.readFileSync(f, 'utf8');
     if (!appHtml.includes('id="__ime"')) {
       const guard = `<script id="__ime">(function(){var t=0;addEventListener('compositionend',function(){t=Date.now()},true);addEventListener('keydown',function(e){if(e.key==='Enter'&&(e.isComposing||e.keyCode===229||Date.now()-t<100))e.stopImmediatePropagation()},true)})();</scr` + `ipt>`;
       appHtml = appHtml.replace(/<head[^>]*>/i, m => m + guard);
+    }
+    if (!appHtml.includes('id="__ls"')) {
+      const shim = `<script id="__ls">(function(){try{localStorage.length}catch(e){var m={};var s={getItem:function(k){return k in m?m[k]:null},setItem:function(k,v){m[k]=String(v)},removeItem:function(k){delete m[k]},clear:function(){m={}},key:function(i){return Object.keys(m)[i]||null},get length(){return Object.keys(m).length}};try{Object.defineProperty(window,'localStorage',{value:s});Object.defineProperty(window,'sessionStorage',{value:s})}catch(_){}}})();</scr` + `ipt>`;
+      appHtml = appHtml.replace(/<head[^>]*>/i, m => m + shim);
     }
     return res.end(appHtml);
   }
