@@ -209,7 +209,7 @@ function anthropicCall(opts, cb, attempt = 0) {
     system, messages,
   });
   const url = new URL('/v1/messages', BASE_URL);
-  const up = https.request(url, {
+  const up = (url.protocol === 'http:' ? http : https).request(url, {
     method: 'POST', timeout: 180_000,
     headers: { 'content-type': 'application/json', 'x-api-key': API_KEY, 'anthropic-version': '2023-06-01', 'content-length': Buffer.byteLength(body) },
   }, r => {
@@ -218,7 +218,7 @@ function anthropicCall(opts, cb, attempt = 0) {
       r.resume();                                   // drain 响应体，释放连接
       const backoff = Math.min(10000, 600 * 2 ** attempt) + Math.floor(Math.random() * 500);
       logActivity('retry429', { attempt: attempt + 1, backoff });
-      setTimeout(() => anthropicCall(opts, cb, attempt + 1), backoff);
+      setTimeout(() => { if (!opts.isAborted?.()) anthropicCall(opts, cb, attempt + 1); }, backoff);
       return;
     }
     if (r.statusCode !== 200) {
@@ -257,6 +257,7 @@ function anthropicCall(opts, cb, attempt = 0) {
   up.on('timeout', () => up.destroy(new Error('上游超时')));
   up.on('error', e => cb(e));
   up.end(body);
+  opts.onRequest?.(up);   // 让会话拿到现役请求句柄（429 重试会换新请求，destroy 要打到现役那只）
   return up;
 }
 
@@ -305,13 +306,24 @@ function saveApp({ slug, name, html, tokens, secs, mode }) {
 
 // ---------- 生成会话：带自动续写与自动修复的流水线 ----------
 function makeSession(req, res) {
-  const s = { aborted: false, current: null, totalTokens: 0 };
+  const s = { aborted: false, current: null, totalTokens: 0, abortStep: null };
   // 断开检测必须挂在 res 上：Node 15+ 的 req(IncomingMessage) close 在「消息体读完」就触发——
   // GET 没人读 body 侥幸无感，POST（修复）读完 body 即触发，曾导致修复一启动就自杀且永久沉默
-  res.on('close', () => { if (!res.writableEnded) { s.aborted = true; s.current?.destroy(); } });
+  // destroy() 不带 error 不会发 'error' 事件 → cb 永不执行 → step 的 Promise 永久 pending——
+  // 曾导致访客中途关页面就永久泄漏一个并发槽（待机 fastActive 不归零），必须手动 reject 摇醒等待者
+  res.on('close', () => {
+    if (res.writableEnded) return;
+    s.aborted = true;
+    try { s.current?.destroy(); } catch {}
+    s.abortStep?.(new Error('aborted'));
+  });
   s.step = opts => new Promise((resolve, reject) => {
     if (s.aborted) return reject(new Error('aborted'));
+    s.abortStep = reject;
+    opts.isAborted = () => s.aborted;             // 429 退避窗口里断开：不再发起重试白烧上游
+    opts.onRequest = up => { s.current = up; };
     s.current = anthropicCall(opts, (err, r) => {
+      s.abortStep = null;
       if (err) return reject(err);
       s.totalTokens += r.tokens;
       resolve(r);
