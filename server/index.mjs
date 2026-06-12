@@ -344,10 +344,12 @@ function queueIcon(slug, name) {
           logActivity('icon', { slug, q: String(name).slice(0, 60) });
         }
       } catch {}
-      resolve();
+      // 节流：每个图标之间留足间隔，绝不与访客抢上游 RPM（2026-06-12 补齐任务曾打满网关引发 429 风暴）
+      setTimeout(resolve, ICON_PACE_MS);
     });
   })).catch(() => {});
 }
+const ICON_PACE_MS = Number(process.env.ICON_PACE_SEC || 25) * 1000;
 
 // ---------- 生成会话：带自动续写与自动修复的流水线 ----------
 function makeSession(req, res) {
