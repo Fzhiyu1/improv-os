@@ -155,6 +155,7 @@ async function aboutWindow() {
         <tr><td>图形卡</td><td>Apple M4 Pro（16 核）</td></tr>
         <tr><td>应用程序</td><td>${s.apps} 个可用</td></tr>
         <tr><td>序列号</td><td>C02XB${(s.totalGens + 100000).toString(36).toUpperCase()}2026</td></tr>
+        <tr><td>源代码</td><td><a class="src-link" href="https://github.com/Fzhiyu1/improv-os" target="_blank" rel="noopener">github.com/Fzhiyu1/improv-os</a></td></tr>
       </table>
       <div class="about-note">此电脑上的应用程序均按需提供。</div>
     </div>`;
@@ -176,7 +177,7 @@ function readmeWindow() {
         <li>按 <b>⌘K</b>（或点菜单栏放大镜）搜索一个不存在的应用，例如「帮我妈记血压」，然后安装它；</li>
         <li>被安装过的应用会保留——下一位访客搜索时可以直接打开您安装的版本。</li>
       </ul>
-      <p class="readme-dim">系统资源有限，每小时可安装的应用数量有上限。<br>关于本机 &gt; 可查看系统真实配置。</p>
+      <p class="readme-dim">系统资源有限，每小时可安装的应用数量有上限。<br>关于本机 &gt; 可查看系统真实配置。<br>整机开源：<a class="src-link" href="https://github.com/Fzhiyu1/improv-os" target="_blank" rel="noopener">github.com/Fzhiyu1/improv-os</a></p>
     </div>`;
 }
 

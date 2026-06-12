@@ -429,6 +429,8 @@ body.shutdown #desktop, body.shutdown #menubar { animation: shutdown 1.6s forwar
 .readme ul { margin: 4px 0 10px 22px; }
 .readme li { margin-bottom: 5px; }
 .readme-dim { color: #86868b; font-size: 12px; }
+.src-link { color: var(--blue); text-decoration: none; }
+.src-link:hover { text-decoration: underline; }
 
 /* ---------- 移动端：轻量适配（A）窗口铺满 / 菜单栏精简 / 触摸放大 ---------- */
 #mobile-note { display: none; }   /* 不再劝退，手机直接进入桌面 */
