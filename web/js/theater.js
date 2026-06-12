@@ -227,7 +227,8 @@ export function runGeneration({ win, type, q, mode = 'fast', post = null, appId 
     }
 
     const ctxQs = ctx ? Object.entries(ctx).filter(([, v]) => v).map(([k, v]) => `&${k}=${encodeURIComponent(v)}`).join('') : '';
-    const fetchUrl = post ? post.url : `/api/generate?type=${encodeURIComponent(type)}&q=${encodeURIComponent(q)}&mode=${mode}${ctxQs}`;
+    // 手机上窗口是全屏的，把实际视口宽度告诉服务端——窄屏时 prompt 会要求单栏触摸友好布局
+    const fetchUrl = post ? post.url : `/api/generate?type=${encodeURIComponent(type)}&q=${encodeURIComponent(q)}&mode=${mode}&vw=${innerWidth}${ctxQs}`;
     const fetchOpts = post
       ? { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(post.body), signal: ctrl.signal }
       : { signal: ctrl.signal };

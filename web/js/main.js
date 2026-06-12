@@ -26,6 +26,21 @@ const bootTimer = setInterval(() => {
   }
 }, 180);
 
+// ---------- 手机虚拟键盘补偿 ----------
+// iOS Safari 键盘弹起不缩 layout viewport，应用里 fixed bottom 的输入条会被盖住一半。
+// visualViewport 跟踪真实可视高度：键盘弹起时窗口收到可视区内（CSS 用 --vvh），并把被顶起的页面拉回原位。
+if (window.visualViewport) {
+  const vv = window.visualViewport;
+  const sync = () => {
+    const kb = innerHeight - vv.height > 100;   // 高度差过百视为键盘弹起（横竖屏切换不会误判）
+    document.documentElement.style.setProperty('--vvh', vv.height + 'px');
+    document.body.classList.toggle('kb-open', kb);
+    if (kb) scrollTo(0, 0);                     // iOS 会把整页顶出屏幕，拉回来
+  };
+  vv.addEventListener('resize', sync);
+  vv.addEventListener('scroll', sync);
+}
+
 // ---------- 菜单栏静态图标 ----------
 document.getElementById('mb-apple').innerHTML = UI.apple;
 document.getElementById('mb-battery').innerHTML = UI.battery;

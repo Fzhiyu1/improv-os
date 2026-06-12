@@ -480,6 +480,13 @@ body.shutdown #desktop, body.shutdown #menubar { animation: shutdown 1.6s forwar
 
   /* Spotlight 上移，给虚拟键盘留空间 */
   .spot-panel { top: 11%; }
+
+  /* 虚拟键盘弹起（main.js 维护 --vvh 与 kb-open）：窗口收进真实可视区，Dock 让位给输入条 */
+  body.kb-open .window {
+    top: 0 !important;
+    height: calc(var(--vvh, 100dvh)) !important;
+  }
+  body.kb-open #menubar, body.kb-open #dock { display: none; }
 }
 
 /* ---------- 启动台（应用程序） ---------- */

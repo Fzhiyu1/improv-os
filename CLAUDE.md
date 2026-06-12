@@ -92,6 +92,12 @@ Spotlight"完整版"（mode=deep）与缓存应用"修改"按钮走真正的 ope
 - **Dock 横向可滚动**：图标 48px、隐藏 hover 气泡，防图标挤爆
 - 桌面隐喻与"现场写应用"笑点完整保留。实测 iPhone(390px)：劝退页消失、启动台全屏网格、缓存应用全屏、菜单栏 0 个桌面菜单溢出。桌面端(>760px)零影响。
 
+### 手机体验二期（2026-06-13）
+
+- **生成感知视口**：前端 `/api/generate` 带 `vw=innerWidth`，≤760 时 user prompt 追加移动布局要求（单栏、触摸目标 ≥44px、侧栏改分段控件/抽屉；浏览器页出移动版排版）。活动日志 gen 事件带 `mob:1`。注意：搜索应用按名字缓存，手机生成的单栏版会被桌面复用（单栏在桌面窗口可用，接受）。
+- **虚拟键盘补偿**：iOS Safari 键盘弹起不缩 layout viewport，应用内 fixed bottom 输入条被盖。main.js 用 `visualViewport` 维护 `--vvh` + `body.kb-open`（高度差 >100 判键盘），CSS 窄屏下窗口收进可视区、隐藏菜单栏/Dock，`scrollTo(0,0)` 拉回被顶起的页面。
+- **PWA**：`web/manifest.webmanifest`（standalone）+ `icons/icon-{180,192,512}.png`（Pillow 生成，180 为 iOS 方形）+ apple-touch meta。加到主屏幕后全屏无地址栏。MIME 表补 `.webmanifest`。
+
 ## 内网运维控制台（2026-06-12 上线）
 
 `admin/server.mjs` 独立进程（重启主服务不杀面板），零依赖，绑 `0.0.0.0:7101`——**不进 Cloudflare 隧道，公网不可见**，内网 `http://<源站内网IP>:7101` 访问（真实地址见 `deploy/INTERNAL.md`），凭 `.env` 的 `ADMIN_TOKEN`（缺失自动生成写回）。
