@@ -2,7 +2,7 @@
 import './bridge.js'; // 激活能力桥的全局 message 监听
 import { initSignal } from './signal.js';
 import { DOCK_APPS, TRASH, launchApp } from './apps.js';
-import { initSpotlight, toggle as toggleSpotlight } from './spotlight.js';
+import { initSpotlight, toggle as toggleSpotlight, SPOT_KEY, SPOT_PLAIN } from './spotlight.js';
 import { createWindow, focusedWindow, macAlert } from './wm.js';
 import { setMuted, isMuted } from './theater.js';
 import { UI } from './icons.js';
@@ -175,7 +175,7 @@ function readmeWindow() {
         <li>打开 Dock 上的「计算器」，观察它被写出来的过程；</li>
         <li>再打开一次「计算器」，注意它和上一个不一样；</li>
         <li>打开 Safari，访问任何网站——那个网站也是现编的；</li>
-        <li>按 <b>⌘K</b>（或点菜单栏放大镜）搜索一个不存在的应用，例如「帮我妈记血压」，然后安装它；</li>
+        <li>按 <b>${SPOT_KEY}</b>（或点菜单栏放大镜）搜索一个不存在的应用，例如「帮我妈记血压」，然后安装它；</li>
         <li>被安装过的应用会保留——下一位访客搜索时可以直接打开您安装的版本。</li>
       </ul>
       <p class="readme-dim">系统资源有限，每小时可安装的应用数量有上限。<br>关于本机 &gt; 可查看系统真实配置。<br>整机开源：<a class="src-link" href="https://github.com/Fzhiyu1/improv-os" target="_blank" rel="noopener">github.com/Fzhiyu1/improv-os</a></p>
@@ -190,7 +190,7 @@ async function openDeepLink() {
     const { apps } = await (await fetch('/api/apps')).json();
     const meta = apps.find(a => a.slug === slug);
     if (!meta) {   // 死链兜底：应用已被清掉时不再静默，把失望转化为一次新的现编
-      macAlert({ title: '无法打开此应用', message: '它已被卸载（或从未存在过）。按 ⌘K 现编一个新的吧——反正这台电脑上所有应用都是现做的。' });
+      macAlert({ title: '无法打开此应用', message: `它已被卸载（或从未存在过）。${SPOT_PLAIN}现编一个新的吧——反正这台电脑上所有应用都是现做的。` });
       return;
     }
     const m = await import('./apps.js');

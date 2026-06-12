@@ -2,6 +2,7 @@
 // 图标确定性生成：名字 hash → macOS 系渐变 + 关键词字形（SF 风格线条），无关键词则用首字。
 import { createWindow } from './wm.js';
 import { openSearchApp, timeAgo } from './apps.js';
+import { SPOT_HINT } from './spotlight.js';
 
 // ---------- macOS 系统色渐变（上浅下深）----------
 const GRADS = [
@@ -128,7 +129,7 @@ function render(win, state) {
   }));
   if (!state.apps.length) {
     empty.hidden = false;
-    empty.innerHTML = '尚未安装任何应用。<br>按 <b>⌘K</b> 搜索想要的应用，安装后会出现在这里。';
+    empty.innerHTML = `尚未安装任何应用。<br>${SPOT_HINT} 搜索想要的应用，安装后会出现在这里。`;
   } else if (!list.length) {
     empty.hidden = false;
     empty.textContent = '没有匹配的应用。';

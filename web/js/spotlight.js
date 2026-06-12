@@ -1,4 +1,11 @@
-// Spotlight：⌘K / 菜单栏放大镜。缓存命中秒开；未命中 → 安装（生成并落盘）
+// Spotlight：⌘K（Win/Linux 为 Ctrl+K，代码本就监听 metaKey||ctrlKey）/ 菜单栏放大镜。缓存命中秒开；未命中 → 安装（生成并落盘）
+
+// 平台自适应的搜索入口提示：界面文案统一引用，别再硬编码 ⌘K（Windows 用户看不懂）
+const isMac = /Mac|iPhone|iPad|iPod/i.test(navigator.platform || navigator.userAgent);
+const coarse = matchMedia('(pointer: coarse)').matches;
+export const SPOT_KEY = isMac ? '⌘K' : 'Ctrl+K';
+export const SPOT_HINT = coarse ? '点菜单栏的放大镜' : `按 <b>${SPOT_KEY}</b>`;     // 富文本场景
+export const SPOT_PLAIN = coarse ? '点菜单栏的放大镜' : `按 ${SPOT_KEY}`;           // 纯文本场景（alert）
 import { genericAppIcon, openSearchApp, timeAgo } from './apps.js';
 
 let overlay, input, results, items = [], selected = 0, debounce;
