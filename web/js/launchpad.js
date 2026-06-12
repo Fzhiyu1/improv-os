@@ -119,7 +119,7 @@ function render(win, state) {
   if (state.q) list = list.filter(a => a.name.toLowerCase().includes(state.q));
   grid.innerHTML = list.map((a, i) => `
     <button class="lp-app" data-i="${i}" title="打开 ${a.opens || 0} 次 · ${timeAgo(a.updatedAt || a.createdAt)}">
-      <span class="lp-icon">${launchpadIcon(a.name)}</span>
+      <span class="lp-icon">${a.icon ? `<img src="/api/icon?slug=${a.slug}" alt="" loading="lazy">` : launchpadIcon(a.name)}</span>
       <span class="lp-name">${esc(a.name)}</span>
     </button>`).join('');
   grid.querySelectorAll('.lp-app').forEach(b => b.addEventListener('click', () => {

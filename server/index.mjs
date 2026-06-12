@@ -317,6 +317,36 @@ function saveApp({ slug, name, html, tokens, secs, mode }) {
   try { const old = JSON.parse(fs.readFileSync(path.join(dir, 'meta.json'), 'utf8')); opens = old.opens || 0; createdAt = old.createdAt || createdAt; } catch {}
   fs.writeFileSync(path.join(dir, 'index.html'), html);
   fs.writeFileSync(path.join(dir, 'meta.json'), JSON.stringify({ name, slug, createdAt, updatedAt: new Date().toISOString(), tokens, secs, mode: mode || 'fast', opens }, null, 2));
+  queueIcon(slug, name);   // 异步配一个 AI 设计的图标，不阻塞主流程
+}
+
+// ---------- AI 应用图标：落盘后异步生成，存量开机补齐（独立 1 并发闸不抢访客通道）----------
+const ICON_PROMPT = `你是 macOS 应用图标设计师。为给定应用输出一个内联 SVG 图标：
+- 只输出 <svg>…</svg>，无任何解释、无 markdown 围栏。
+- viewBox="0 0 64 64"；背景是 <rect x="2" y="2" width="60" height="60" rx="14"> 的 squircle，配贴合应用主题的双色 linearGradient；中央一个简洁有辨识度的图形符号（细线条或填充，SF Symbols 气质），构图克制。
+- 不含任何文字、<script>、<image>、<foreignObject>、事件属性或外部引用。渐变 id 用与应用相关的独特字符串，避免与同屏其他图标冲突。`;
+const iconGate = makeGate(1, 300);
+function queueIcon(slug, name) {
+  const f = path.join(APPS_DIR, slug, 'icon.svg');
+  if (fs.existsSync(f)) return;
+  iconGate.run(() => new Promise(resolve => {
+    if (fs.existsSync(f)) return resolve();
+    anthropicCall({
+      system: ICON_PROMPT,
+      messages: [{ role: 'user', content: `应用名称：「${escapeForPrompt(String(name).slice(0, 60))}」` }],
+      maxTokens: 1500,
+    }, (err, r) => {
+      try {
+        const svg = !err && String(r.text).match(/<svg[\s\S]*<\/svg>/i)?.[0];
+        // 安全闸：SVG 经 <img> 引用不执行脚本，但仍拒绝一切可执行/外联痕迹
+        if (svg && svg.length < 20000 && !/<script|<image|<foreignObject|<use|on\w+\s*=|javascript:|href\s*=/i.test(svg)) {
+          fs.writeFileSync(f, svg);
+          logActivity('icon', { slug, q: String(name).slice(0, 60) });
+        }
+      } catch {}
+      resolve();
+    });
+  })).catch(() => {});
 }
 
 // ---------- 生成会话：带自动续写与自动修复的流水线 ----------
@@ -594,7 +624,13 @@ function listApps() {
   const out = [];
   for (const slug of fs.readdirSync(APPS_DIR)) {
     const mp = path.join(APPS_DIR, slug, 'meta.json');
-    if (fs.existsSync(mp)) { try { out.push(JSON.parse(fs.readFileSync(mp, 'utf8'))); } catch {} }
+    if (fs.existsSync(mp)) {
+      try {
+        const m = JSON.parse(fs.readFileSync(mp, 'utf8'));
+        m.icon = fs.existsSync(path.join(APPS_DIR, slug, 'icon.svg'));   // 有 AI 图标则前端用之
+        out.push(m);
+      } catch {}
+    }
   }
   return out;
 }
@@ -711,6 +747,16 @@ const server = http.createServer((req, res) => {
     return;
   }
 
+  if (u.pathname === '/api/icon') {
+    const slug = u.searchParams.get('slug') || '';
+    if (!/^[a-f0-9]{12}$/.test(slug)) return json(res, 400, { error: '缺少参数' });
+    const f = path.join(APPS_DIR, slug, 'icon.svg');
+    if (!fs.existsSync(f)) return json(res, 404, { error: 'not found' });
+    res.writeHead(200, { 'content-type': 'image/svg+xml', 'cache-control': 'public, max-age=86400',
+      'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'" });
+    return res.end(fs.readFileSync(f));
+  }
+
   if (u.pathname === '/api/apps') {
     // 启动台：全部已安装应用（常用在前）
     return json(res, 200, { apps: listApps().sort((a, b) => (b.opens || 0) - (a.opens || 0)) });
@@ -799,3 +845,12 @@ server.listen(PORT, () => console.log(`现编OS 运行于 http://localhost:${POR
     if (orphans.length) console.log(`[agent] 启动清理孤儿会话 ${orphans.length} 个`);
   } catch {}
 })();
+
+// 存量应用图标补齐：iconGate 串行慢速消化，重启只补缺失的
+setTimeout(() => {
+  try {
+    const missing = listApps().filter(a => !a.icon);
+    if (missing.length) console.log(`[icon] 待补图标 ${missing.length} 个`);
+    for (const a of missing) queueIcon(a.slug, a.name);
+  } catch {}
+}, 5000);
