@@ -18,12 +18,14 @@ export const DOCK_APPS = [
   { id: 'music', name: '音乐', icon: DockIcons.music, q: '音乐（macOS 音乐播放器，含侧栏、专辑墙用 CSS 渐变生成封面、底部播放条，可用 WebAudio 合成简短旋律真实播放）', size: [920, 600] },
   { id: 'weather', name: '天气', icon: DockIcons.weather, q: '天气（macOS 天气应用，当前城市天气大卡片含动态 CSS 天气动画、未来一周预报、多城市侧栏）', size: [820, 580] },
   { id: 'settings', name: '系统设置', icon: DockIcons.settings, q: '系统设置（macOS 系统设置，左侧设置分类侧栏、右侧设置面板，开关与滑块可交互，含外观、桌面与程序坞、声音等分组）', size: [780, 560] },
+  { id: 'github', name: 'GitHub', icon: DockIcons.github, href: 'https://github.com/Fzhiyu1/improv-os' },   // 唯一的"真应用"：直跳本机源码仓库
 ];
 
 export const TRASH = { id: 'trash', name: '废纸篓', icon: DockIcons.trash, q: '废纸篓（macOS 废纸篓窗口，文件列表含若干被删除的文件、清倒废纸篓按钮与确认对话框）', size: [700, 460] };
 
 // 点开 Dock 应用：弹跳 → 新窗口 → 现场生成
 export function launchApp(app, dockEl) {
+  if (app.href) { bounce(dockEl); window.open(app.href, '_blank', 'noopener'); return; }
   if (app.special === 'browser') { bounce(dockEl); openBrowser(); return; }
   if (app.special === 'launchpad') { bounce(dockEl); import('./launchpad.js').then(m => m.openLaunchpad()); return; }
   bounce(dockEl);
