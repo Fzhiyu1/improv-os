@@ -65,7 +65,7 @@ async function consumeSSE(url, opts, onEvent) {
 // post: { url, body } 时走 POST（用于运行时修复），否则 GET /api/generate
 // 演出形态：实时渲染——应用在窗口里逐块长出来（禁脚本预览 iframe + document.write 流式喂入），
 // 底部一条小代码滚动条证明它是现写的；完成后无缝切换为沙箱可交互 iframe。
-export function runGeneration({ win, type, q, mode = 'fast', post = null, appId = null }) {
+export function runGeneration({ win, type, q, mode = 'fast', post = null, appId = null, ctx = null }) {
   if (appId) win._appId = appId;
   return new Promise((resolve, reject) => {
     const body = win.body;
@@ -226,7 +226,8 @@ export function runGeneration({ win, type, q, mode = 'fast', post = null, appId 
       }, 380);
     }
 
-    const fetchUrl = post ? post.url : `/api/generate?type=${encodeURIComponent(type)}&q=${encodeURIComponent(q)}&mode=${mode}`;
+    const ctxQs = ctx ? Object.entries(ctx).filter(([, v]) => v).map(([k, v]) => `&${k}=${encodeURIComponent(v)}`).join('') : '';
+    const fetchUrl = post ? post.url : `/api/generate?type=${encodeURIComponent(type)}&q=${encodeURIComponent(q)}&mode=${mode}${ctxQs}`;
     const fetchOpts = post
       ? { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(post.body), signal: ctrl.signal }
       : { signal: ctrl.signal };

@@ -34,7 +34,7 @@ export function openBrowser(initial = '') {
     fwdBtn.disabled = inst.idx >= inst.history.length - 1;
   };
 
-  async function navigate(url, { push = true, force = false } = {}) {
+  async function navigate(url, { push = true, force = false, ctx = null } = {}) {
     url = url.trim();
     if (!url) return;
     if (inst.navigating) return;          // 防止并发导航互相打架（前一次还在生成时忽略新点击）
@@ -54,13 +54,20 @@ export function openBrowser(initial = '') {
     }
     win.body.classList.remove('app-mounted');
     try {
-      const { html } = await runGeneration({ win, type: 'browser', q: url, appId: 'web:' + hashUrl(url) });
+      const { html } = await runGeneration({ win, type: 'browser', q: url, appId: 'web:' + hashUrl(url), ctx });
       inst.cache.set(url, html);
       inst.iframe = win.body.querySelector('iframe');
     } catch (e) { if (!e?.handled) console.warn(e); }
     finally { inst.navigating = false; }
   }
   inst.navigate = navigate;
+  // 套娃跳转的来路上下文：当前页 URL + <title> ——下一页生成时保持同站连贯
+  inst.fromCtx = linkText => {
+    const cur = inst.history[inst.idx];
+    if (!cur) return null;
+    const title = (inst.cache.get(cur) || '').match(/<title>([^<]{1,80})/)?.[1] || '';
+    return { from: cur.slice(0, 200), fromTitle: title.trim(), link: String(linkText || '').slice(0, 60) };
+  };
 
   input.addEventListener('keydown', e => {
     if (e.isComposing || e.keyCode === 229) return;   // 输入法选词的回车不触发导航
@@ -74,13 +81,13 @@ export function openBrowser(initial = '') {
   return win;
 }
 
-// 生成页面内的链接点击 → postMessage 套娃导航
+// 生成页面内的链接点击 → postMessage 套娃导航（带来路上下文，让下一页接得上）
 addEventListener('message', e => {
   if (e.data?.type !== 'navigate' || typeof e.data.url !== 'string') return;
   for (const inst of browsers) {
     const f = inst.win.body.querySelector('iframe');
     if (f && f.contentWindow === e.source) {
-      inst.navigate(e.data.url.slice(0, 200));
+      inst.navigate(e.data.url.slice(0, 200), { ctx: inst.fromCtx(e.data.text) });
       return;
     }
   }
