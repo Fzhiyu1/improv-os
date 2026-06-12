@@ -133,6 +133,9 @@ input,select,textarea{font:inherit;border:1px solid var(--line);border-radius:6p
 input:focus,select:focus,textarea:focus{border-color:var(--blue);box-shadow:0 0 0 3px rgba(10,130,255,.18)}
 </style>
 <script>window.addEventListener('error',function(e){try{parent.postMessage({type:'apperror',message:String((e&&(e.message||e.error))||'未知错误').slice(0,300)},'*')}catch(_){}});<\/script>
+<script id="__ime">/* 输入法守卫：中文选词的回车（含 Safari compositionend 先于 keydown 的怪癖）不传给应用 */
+(function(){var t=0;addEventListener('compositionend',function(){t=Date.now()},true);
+addEventListener('keydown',function(e){if(e.key==='Enter'&&(e.isComposing||e.keyCode===229||Date.now()-t<100))e.stopImmediatePropagation()},true)})();<\/script>
 <script>
 (function(){
   var seq=0, waiting={}, appId=null, queued=[];
@@ -791,7 +794,13 @@ const server = http.createServer((req, res) => {
     if (!fs.existsSync(f)) return json(res, 404, { error: 'not found' });
     try { const m = JSON.parse(fs.readFileSync(path.join(dir, 'meta.json'), 'utf8')); m.opens = (m.opens || 0) + 1; fs.writeFileSync(path.join(dir, 'meta.json'), JSON.stringify(m, null, 2)); } catch {}
     res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
-    return res.end(fs.readFileSync(f));
+    // 存量应用在落盘时还没有输入法守卫，出口处补注（新应用已含 __ime，跳过）
+    let appHtml = fs.readFileSync(f, 'utf8');
+    if (!appHtml.includes('id="__ime"')) {
+      const guard = `<script id="__ime">(function(){var t=0;addEventListener('compositionend',function(){t=Date.now()},true);addEventListener('keydown',function(e){if(e.key==='Enter'&&(e.isComposing||e.keyCode===229||Date.now()-t<100))e.stopImmediatePropagation()},true)})();</scr` + `ipt>`;
+      appHtml = appHtml.replace(/<head[^>]*>/i, m => m + guard);
+    }
+    return res.end(appHtml);
   }
 
   if (u.pathname === '/api/live') {

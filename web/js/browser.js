@@ -71,8 +71,10 @@ export function openBrowser(initial = '') {
     return { from: cur.slice(0, 200), fromTitle: title.trim(), link: String(linkText || '').slice(0, 60), style };
   };
 
+  let imeAt = 0;
+  input.addEventListener('compositionend', () => { imeAt = Date.now(); });
   input.addEventListener('keydown', e => {
-    if (e.isComposing || e.keyCode === 229) return;   // 输入法选词的回车不触发导航
+    if (e.isComposing || e.keyCode === 229 || Date.now() - imeAt < 100) return;   // 输入法选词的回车不触发导航（含 Safari 时序怪癖）
     if (e.key === 'Enter') navigate(input.value);
   });
   backBtn.addEventListener('click', () => { if (inst.idx > 0) { inst.idx--; navigate(inst.history[inst.idx], { push: false }); } });

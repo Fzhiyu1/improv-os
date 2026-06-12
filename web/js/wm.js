@@ -82,28 +82,45 @@ export function createWindow({ title = '', width = 760, height = 520, x, y } = {
     setTimeout(() => el.classList.remove('animating'), 280);
   });
 
-  // 拖拽（仅标题栏，避开按钮）
+  // 拖拽（仅标题栏，避开按钮）。三处性能要点：
+  // ① setPointerCapture——指针滑进任何 iframe（应用内容区）事件也不丢，否则窗口拖到一半卡住不跟手
+  // ② down 时缓存尺寸，move 里不再读 offset* 强制重排
+  // ③ rAF 合帧写入，120Hz 指针不超频刷样式
   titlebar.addEventListener('pointerdown', e => {
     if (e.target.closest('.tl') || e.target.closest('.win-action')) return;
     const sx = e.clientX - el.offsetLeft, sy = e.clientY - el.offsetTop;
+    const w = el.offsetWidth;
+    try { titlebar.setPointerCapture(e.pointerId); } catch {}
+    let raf = 0, nx, ny;
     const move = ev => {
-      el.style.left = Math.min(Math.max(ev.clientX - sx, -el.offsetWidth + 80), innerWidth - 30) + 'px';
-      el.style.top = Math.min(Math.max(ev.clientY - sy, 25), innerHeight - 40) + 'px';
+      nx = Math.min(Math.max(ev.clientX - sx, -w + 80), innerWidth - 30);
+      ny = Math.min(Math.max(ev.clientY - sy, 25), innerHeight - 40);
+      if (!raf) raf = requestAnimationFrame(() => { raf = 0; el.style.left = nx + 'px'; el.style.top = ny + 'px'; });
     };
-    const up = () => { removeEventListener('pointermove', move); removeEventListener('pointerup', up); removeEventListener('pointercancel', up); };
-    addEventListener('pointermove', move); addEventListener('pointerup', up); addEventListener('pointercancel', up);
+    const up = () => {
+      try { titlebar.releasePointerCapture(e.pointerId); } catch {}
+      titlebar.removeEventListener('pointermove', move); titlebar.removeEventListener('pointerup', up); titlebar.removeEventListener('pointercancel', up);
+    };
+    titlebar.addEventListener('pointermove', move); titlebar.addEventListener('pointerup', up); titlebar.addEventListener('pointercancel', up);
   });
 
-  // 右下角缩放
-  el.querySelector('.win-resize').addEventListener('pointerdown', e => {
+  // 右下角缩放（同款 capture + rAF）
+  const rz = el.querySelector('.win-resize');
+  rz.addEventListener('pointerdown', e => {
     e.preventDefault(); e.stopPropagation();
     const sw = el.offsetWidth - e.clientX, sh = el.offsetHeight - e.clientY;
+    try { rz.setPointerCapture(e.pointerId); } catch {}
+    let raf = 0, nw, nh;
     const move = ev => {
-      el.style.width = Math.max(360, sw + ev.clientX) + 'px';
-      el.style.height = Math.max(240, sh + ev.clientY) + 'px';
+      nw = Math.max(360, sw + ev.clientX);
+      nh = Math.max(240, sh + ev.clientY);
+      if (!raf) raf = requestAnimationFrame(() => { raf = 0; el.style.width = nw + 'px'; el.style.height = nh + 'px'; });
     };
-    const up = () => { removeEventListener('pointermove', move); removeEventListener('pointerup', up); removeEventListener('pointercancel', up); };
-    addEventListener('pointermove', move); addEventListener('pointerup', up); addEventListener('pointercancel', up);
+    const up = () => {
+      try { rz.releasePointerCapture(e.pointerId); } catch {}
+      rz.removeEventListener('pointermove', move); rz.removeEventListener('pointerup', up); rz.removeEventListener('pointercancel', up);
+    };
+    rz.addEventListener('pointermove', move); rz.addEventListener('pointerup', up); rz.addEventListener('pointercancel', up);
   });
 
   return win;
@@ -180,8 +197,10 @@ export function macSheet({ win, title, message, placeholder = '', confirmText = 
     ta.addEventListener('input', () => { okBtn.disabled = !ta.value.trim(); });
     ov.querySelector('.sheet-cancel').addEventListener('click', () => close(null));
     okBtn.addEventListener('click', submit);
+    let imeAt = 0;
+    ta.addEventListener('compositionend', () => { imeAt = Date.now(); });
     ta.addEventListener('keydown', e => {
-      if (e.isComposing || e.keyCode === 229) return;   // 输入法选词中的 Esc 只收候选框，不关对话框
+      if (e.isComposing || e.keyCode === 229 || Date.now() - imeAt < 100) return;   // 输入法选词中的 Esc 只收候选框，不关对话框
       if (e.key === 'Escape') { e.preventDefault(); close(null); }
       else if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); submit(); }
     });
