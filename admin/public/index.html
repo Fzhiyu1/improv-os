@@ -170,7 +170,7 @@ function renderSvcGrid() {
 const METRICS = [
   ['visitors', '在线访客（5 分钟）'], ['fast', '快轨 并发/排队'], ['deep', '深轨 并发/排队'],
   ['todayGens', '今日生成'], ['todayTokens', '今日 token'], ['totalGens', '累计生成'],
-  ['totalTokens', '累计 token'], ['apps', '已装应用'],
+  ['totalTokens', '累计 token'], ['totalVisits', '累计浏览'], ['apps', '已装应用'],
 ];
 function renderMetrics() {
   $('#metrics').innerHTML = METRICS.map(([k, label]) => `<div class="card metric"><div class="k">${label}</div><div class="v" id="m-${k}">—</div></div>`).join('');
@@ -206,6 +206,7 @@ async function refreshOverview() {
     if (d.stats) {
       $('#m-totalGens').textContent = fmt(d.stats.totalGens);
       $('#m-totalTokens').textContent = fmt(d.stats.totalTokens);
+      $('#m-totalVisits').textContent = fmt(d.stats.totalVisits ?? d.live?.totalVisits);
       $('#m-apps').textContent = fmt(d.stats.apps);
     }
   } catch (e) { $('#pub-text').textContent = '控制台连接中断'; }

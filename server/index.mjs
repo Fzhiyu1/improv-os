@@ -30,16 +30,28 @@ if (!API_KEY) { console.error('缺少 ANTHROPIC_AUTH_TOKEN'); process.exit(1); }
 fs.mkdirSync(APPS_DIR, { recursive: true });
 
 // ---------- 全局统计 ----------
-let stats = { totalGens: 0, totalTokens: 0 };
+let stats = { totalGens: 0, totalTokens: 0, totalVisits: 0 };
 try { stats = { ...stats, ...JSON.parse(fs.readFileSync(STATS_FILE, 'utf8')) }; } catch {}
 function bumpStats(tokens) {
   stats.totalGens++; stats.totalTokens += tokens || 0;
   dailyTokens += tokens || 0;            // 计入今日 token 预算（公网成本硬闸）
   try { fs.writeFileSync(STATS_FILE, JSON.stringify(stats)); } catch {}
 }
+function bumpVisit() {
+  stats.totalVisits++;
+  try { fs.writeFileSync(STATS_FILE, JSON.stringify(stats)); } catch {}
+}
 
 // ---------- 活动日志（内网控制台数据源：NDJSON 追加，1MB 轮转一份）----------
 const ACTIVITY_FILE = path.join(APPS_DIR, 'activity.ndjson');
+// 累计浏览量计数器首次启用：用尚存的活动日志做种子（轮转只剩 ~2MB 窗口，必然低估真实历史）
+if (!stats.totalVisits) {
+  let seed = 0;
+  for (const f of [ACTIVITY_FILE + '.1', ACTIVITY_FILE]) {
+    try { seed += fs.readFileSync(f, 'utf8').split('\n').filter(l => l.includes('"type":"visit"')).length; } catch {}
+  }
+  if (seed) { stats.totalVisits = seed; try { fs.writeFileSync(STATS_FILE, JSON.stringify(stats)); } catch {} }
+}
 function logActivity(type, data = {}) {
   try {
     if (fs.existsSync(ACTIVITY_FILE) && fs.statSync(ACTIVITY_FILE).size > 1024 * 1024)
@@ -653,7 +665,7 @@ const server = http.createServer((req, res) => {
     return json(res, 403, { error: '请求来源不被允许', detail: '请直接从 os.fzhiyu.dev 访问使用。' });
   }
   touchVisitor(ip);
-  if (u.pathname === '/') logActivity('visit', { ip, ua: String(req.headers['user-agent'] || '').slice(0, 90) });
+  if (u.pathname === '/') { bumpVisit(); logActivity('visit', { ip, ua: String(req.headers['user-agent'] || '').slice(0, 90) }); }
 
   if (u.pathname === '/api/generate') {
     const type = u.searchParams.get('type') || 'dock';        // dock | search | browser
@@ -789,12 +801,13 @@ const server = http.createServer((req, res) => {
       lanActive: lanGate.active, lanMax: LAN_GEN_CONCURRENCY,
       deepActive: agentGate.active, deepQueue: agentGate.pending,
       visitors5m: visitors5m(), todayGens: dailyCount, todayTokens: dailyTokens,
+      totalVisits: stats.totalVisits,
     });
   }
 
   if (u.pathname === '/api/stats') {
     return json(res, 200, {
-      apps: listApps().length, totalGens: stats.totalGens, totalTokens: stats.totalTokens, model: MODEL,
+      apps: listApps().length, totalGens: stats.totalGens, totalTokens: stats.totalTokens, totalVisits: stats.totalVisits, model: MODEL,
       live: {
         fastActive: genGate.active, fastQueue: genGate.pending, fastMax: GEN_CONCURRENCY,
         lanActive: lanGate.active, lanMax: LAN_GEN_CONCURRENCY,
