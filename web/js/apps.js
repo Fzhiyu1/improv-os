@@ -18,6 +18,7 @@ export const DOCK_APPS = [
   { id: 'music', name: '音乐', icon: DockIcons.music, q: '音乐（macOS 音乐播放器，含侧栏、专辑墙用 CSS 渐变生成封面、底部播放条，可用 WebAudio 合成简短旋律真实播放）', size: [920, 600] },
   { id: 'weather', name: '天气', icon: DockIcons.weather, q: '天气（macOS 天气应用，当前城市天气大卡片含动态 CSS 天气动画、未来一周预报、多城市侧栏）', size: [820, 580] },
   { id: 'settings', name: '系统设置', icon: DockIcons.settings, q: '系统设置（macOS 系统设置，左侧设置分类侧栏、右侧设置面板，开关与滑块可交互，含外观、桌面与程序坞、声音等分组）', size: [780, 560] },
+  { id: 'wall', name: '留言板', icon: DockIcons.wall, special: 'wall', slug: '0ff73fe1ebf6' },   // 全站共享的公共留言墙（缓存应用秒开，写入过 AI 审核）
   { id: 'github', name: 'GitHub', icon: DockIcons.github, href: 'https://github.com/Fzhiyu1/improv-os' },   // 唯一的"真应用"：直跳本机源码仓库
 ];
 
@@ -26,6 +27,7 @@ export const TRASH = { id: 'trash', name: '废纸篓', icon: DockIcons.trash, q:
 // 点开 Dock 应用：弹跳 → 新窗口 → 现场生成
 export function launchApp(app, dockEl) {
   if (app.href) { bounce(dockEl); window.open(app.href, '_blank', 'noopener'); return; }
+  if (app.special === 'wall') { bounce(dockEl); openSearchApp({ name: app.name, slug: app.slug, cached: true }); return; }   // 公共留言墙：永远打开同一份缓存（全站一面墙）
   if (app.special === 'browser') { bounce(dockEl); openBrowser(); return; }
   if (app.special === 'launchpad') { bounce(dockEl); import('./launchpad.js').then(m => m.openLaunchpad()); return; }
   bounce(dockEl);

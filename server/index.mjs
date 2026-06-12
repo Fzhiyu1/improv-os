@@ -91,6 +91,22 @@ const BLOCK = /(色情|裸体|porn|nude|赌博|毒品|炸弹|爆炸物|枪支弹
 // ---------- 运行时能力（生成应用经父窗口桥调用） ----------
 const STORE_DIR = path.join(APPS_DIR, '_store');
 const store = makeStore(STORE_DIR, { block: s => BLOCK.test(s) });
+// 受 AI 审核的 store 命名空间（公开留言墙等 UGC 直接展示给所有访客的应用）。逗号分隔 appId。
+const MODERATED = new Set((process.env.MODERATED_APPIDS || '').split(',').map(s => s.trim()).filter(Boolean));
+// AI 审核闸：小调用判断 UGC 是否适合公开展示。判定失败（上游异常）按拒绝处理——公开墙宁严勿漏。
+function moderate(text) {
+  return new Promise(resolve => {
+    anthropicCall({
+      system: '你是内容审核员。判断给定的访客留言能否在面向所有人（含未成年人）的公开留言墙上展示。拒绝：辱骂攻击、色情、暴力、赌博毒品、政治敏感、广告引流（含联系方式/网址）、人肉隐私。允许：正常问候、吐槽、玩笑、对网站的评价（包括差评）。只输出一行：OK 或 NO:原因（4字内）。',
+      messages: [{ role: 'user', content: String(text).slice(0, 2000) }],
+      maxTokens: 20,
+    }, (err, r) => {
+      if (err) return resolve({ ok: false, reason: 'upstream' });
+      const t = String(r.text || '').trim();
+      resolve(t.startsWith('OK') ? { ok: true } : { ok: false, reason: t.replace(/^NO:?/, '').slice(0, 12) || '未通过' });
+    });
+  });
+}
 // 慢轨 agent：固定工作目录（并发限 1 保证不冲突）+ 验证脚本源
 const AGENT_WORK = path.join(APPS_DIR, '_agent');
 const VERIFIER_SRC = path.join(ROOT, 'server', 'verify-html.mjs');
@@ -711,8 +727,16 @@ const server = http.createServer((req, res) => {
 
   if (u.pathname === '/api/capability/store' && req.method === 'POST') {
     if (!lan && !capLimit.store.check(ip)) return json(res, 429, { error: '请求过于频繁' });
-    readBody(req).then(b => {
+    readBody(req).then(async b => {
       if (!b.appId || !b.op) return json(res, 400, { error: '缺少参数' });
+      // 公开留言墙等受审核命名空间：写入先过 AI 审核闸，不过不落盘
+      if (b.op === 'set' && MODERATED.has(String(b.appId))) {
+        const verdict = await moderate(JSON.stringify(b.value ?? ''));
+        if (!verdict.ok) {
+          logActivity('mod_block', { appId: String(b.appId).slice(0, 40), reason: verdict.reason, ip });
+          return json(res, 400, { error: '留言未通过审核', detail: '请文明发言后重试。' });
+        }
+      }
       return store.op(String(b.appId), { op: b.op, key: b.key, value: b.value })
         .then(result => json(res, 200, { result: result === undefined ? null : result }));
     }).catch(e => json(res, 400, { error: e.message }));
