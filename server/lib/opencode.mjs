@@ -5,6 +5,8 @@ const OC_HOST = process.env.OC_HOST || '127.0.0.1';
 const OC_PORT = Number(process.env.OC_PORT || 4096);
 const OC_PROVIDER = process.env.OC_PROVIDER || 'gateway';
 const OC_MODEL = process.env.OC_MODEL || 'claude-sonnet-4-6';
+// sendMessage 在 agent 回合结束前不返回任何字节，socket 空闲超时必须长于深轨硬墙钟（否则它先开枪）
+const SEND_TIMEOUT_MS = (Number(process.env.DEEP_TIMEOUT_SEC || 150) + 60) * 1000;
 
 function ocRequest(method, pathname, body, timeout = 300000) {
   return new Promise((resolve, reject) => {
@@ -43,7 +45,7 @@ export function sendMessage(sid, dir, { text, system }) {
     model: { providerID: OC_PROVIDER, modelID: OC_MODEL },
     ...(system ? { system } : {}),
     parts: [{ type: 'text', text }],
-  });
+  }, SEND_TIMEOUT_MS);
 }
 
 export async function deleteSession(sid, dir) {
