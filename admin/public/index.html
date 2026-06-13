@@ -171,6 +171,7 @@ const METRICS = [
   ['visitors', '在线访客（5 分钟）'], ['fast', '快轨 并发/排队'], ['deep', '深轨 并发/排队'],
   ['todayGens', '今日生成'], ['todayTokens', '今日 token'], ['totalGens', '累计生成'],
   ['totalTokens', '累计 token'], ['totalVisits', '累计浏览'], ['apps', '已装应用'],
+  ['tokIn', '累计输入 token'], ['tokOut', '累计输出 token'], ['tokCache', '缓存读/写 token'], ['cost', '累计成本（元）'],
 ];
 function renderMetrics() {
   $('#metrics').innerHTML = METRICS.map(([k, label]) => `<div class="card metric"><div class="k">${label}</div><div class="v" id="m-${k}">—</div></div>`).join('');
@@ -208,6 +209,11 @@ async function refreshOverview() {
       $('#m-totalTokens').textContent = fmt(d.stats.totalTokens);
       $('#m-totalVisits').textContent = fmt(d.stats.totalVisits ?? d.live?.totalVisits);
       $('#m-apps').textContent = fmt(d.stats.apps);
+      const t = d.stats.tokens || {};
+      $('#m-tokIn').textContent = fmt(t.in);
+      $('#m-tokOut').textContent = fmt(t.out);
+      $('#m-tokCache').textContent = `${fmt(t.cacheRead)} / ${fmt(t.cacheCreate)}`;
+      $('#m-cost').textContent = d.stats.cost == null ? '未配置单价' : '¥' + d.stats.cost.toLocaleString(undefined, { maximumFractionDigits: 2 });
     }
   } catch (e) { $('#pub-text').textContent = '控制台连接中断'; }
 }

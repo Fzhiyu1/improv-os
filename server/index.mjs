@@ -30,16 +30,45 @@ if (!API_KEY) { console.error('缺少 ANTHROPIC_AUTH_TOKEN'); process.exit(1); }
 fs.mkdirSync(APPS_DIR, { recursive: true });
 
 // ---------- 全局统计 ----------
-let stats = { totalGens: 0, totalTokens: 0, totalVisits: 0 };
+// totalTokens 历史口径只含快轨输出（修复前），修复后 accrue 改为全量(in+out+cache)继续累加，故历史段偏小属正常。
+// 分项 inTokens/outTokens/cacheReadTokens/cacheCreateTokens 从修复点起按四类精确统计，供按单价换算成本。
+let stats = { totalGens: 0, totalTokens: 0, totalVisits: 0, inTokens: 0, outTokens: 0, cacheReadTokens: 0, cacheCreateTokens: 0 };
 try { stats = { ...stats, ...JSON.parse(fs.readFileSync(STATS_FILE, 'utf8')) }; } catch {}
-function bumpStats(tokens) {
-  stats.totalGens++; stats.totalTokens += tokens || 0;
-  dailyTokens += tokens || 0;            // 计入今日 token 预算（公网成本硬闸）
+// 节流写盘：token 入账频率高（每次上游调用都触发），内存累加 + 防抖落盘，避免高频同步写阻塞事件循环
+let statsDirty = false, statsTimer = null;
+function flushStats() {
+  if (!statsDirty) return;
+  statsDirty = false;
   try { fs.writeFileSync(STATS_FILE, JSON.stringify(stats)); } catch {}
 }
-function bumpVisit() {
-  stats.totalVisits++;
-  try { fs.writeFileSync(STATS_FILE, JSON.stringify(stats)); } catch {}
+function markStatsDirty() { statsDirty = true; if (!statsTimer) statsTimer = setTimeout(() => { statsTimer = null; flushStats(); }, 2000); }
+function bumpGens() { stats.totalGens++; markStatsDirty(); }   // 每次生成计一次（快慢轨共用，在 finishGeneration）
+// 统一计费入账：所有上游消耗（快轨续写修复 / 图标 / 审核 / 能力 AI / 慢轨）都过这里，分输入/输出/缓存读写四类
+function accrue(u) {
+  const inT = u.inTokens || 0, outT = u.outTokens || 0, cr = u.cacheRead || 0, cc = u.cacheCreate || 0;
+  if (!(inT || outT || cr || cc)) return;
+  stats.inTokens += inT; stats.outTokens += outT; stats.cacheReadTokens += cr; stats.cacheCreateTokens += cc;
+  stats.totalTokens += inT + outT + cr + cc;   // 与历史累计连续；缓存读写也是真实输入量
+  dailyTokens += inT + outT + cr + cc;          // 日预算硬闸（公网成本熔断），按总量更准
+  markStatsDirty();
+}
+function bumpVisit() { stats.totalVisits++; markStatsDirty(); }
+// 进程退出前把内存里未落盘的统计刷出去（systemd restart 发 SIGTERM）
+process.on('exit', flushStats);
+process.on('SIGTERM', () => process.exit(0));
+process.on('SIGINT', () => process.exit(0));
+// 单价（元/百万 token，留空则不显示成本）。四类分开：未命中输入 / 输出 / 缓存读 / 缓存写
+const PRICE = {
+  in: Number(process.env.PRICE_IN_PER_M || 0),
+  out: Number(process.env.PRICE_OUT_PER_M || 0),
+  cacheRead: Number(process.env.PRICE_CACHE_READ_PER_M || 0),
+  cacheWrite: Number(process.env.PRICE_CACHE_WRITE_PER_M || 0),
+};
+const hasPrice = () => !!(PRICE.in || PRICE.out || PRICE.cacheRead || PRICE.cacheWrite);
+// 成本估算：仅基于修复后开始的分项统计（历史 totalTokens 无分项不可换算）。保留完整精度，舍入交给展示层
+function estCost() {
+  if (!hasPrice()) return null;
+  return (stats.inTokens * PRICE.in + stats.outTokens * PRICE.out + stats.cacheReadTokens * PRICE.cacheRead + stats.cacheCreateTokens * PRICE.cacheWrite) / 1e6;
 }
 
 // ---------- 活动日志（内网控制台数据源：NDJSON 追加，1MB 轮转一份）----------
@@ -289,7 +318,7 @@ function anthropicCall(opts, cb, attempt = 0) {
       });
       return;
     }
-    let buf = '', full = '', tokens = 0, stopReason = null;
+    let buf = '', full = '', outTokens = 0, inTokens = 0, cacheRead = 0, cacheCreate = 0, stopReason = null;
     r.on('data', chunk => {
       buf += chunk;
       let i;
@@ -299,17 +328,23 @@ function anthropicCall(opts, cb, attempt = 0) {
         if (!data) continue;
         try {
           const d = JSON.parse(data);
-          if (d.type === 'content_block_delta') {
+          if (d.type === 'message_start') {
+            const u = d.message?.usage;   // 输入 token 在 message_start：未命中输入 + 缓存读 + 缓存写三项分开计
+            if (u) { inTokens = u.input_tokens || 0; cacheRead = u.cache_read_input_tokens || 0; cacheCreate = u.cache_creation_input_tokens || 0; outTokens = u.output_tokens || outTokens; }
+          } else if (d.type === 'content_block_delta') {
             if (d.delta?.type === 'thinking_delta') onThinking?.(d.delta.thinking);
             else if (d.delta?.type === 'text_delta') { full += d.delta.text; onText?.(d.delta.text); }
           } else if (d.type === 'message_delta') {
-            if (d.usage) tokens = d.usage.output_tokens || tokens;
+            if (d.usage) { outTokens = d.usage.output_tokens || outTokens; if (d.usage.input_tokens) inTokens = d.usage.input_tokens; }
             if (d.delta?.stop_reason) stopReason = d.delta.stop_reason;
           }
         } catch {}
       }
     });
-    r.on('end', () => cb(null, { text: full, tokens, stopReason }));
+    r.on('end', () => {
+      accrue({ inTokens, outTokens, cacheRead, cacheCreate });   // 统一入账：覆盖快轨续写修复 / 图标 / 审核 / 能力 AI
+      cb(null, { text: full, tokens: outTokens, inTokens, outTokens, cacheRead, cacheCreate, stopReason });
+    });
   });
   up.on('timeout', () => up.destroy(new Error('上游超时')));
   up.on('error', e => cb(e));
@@ -471,7 +506,7 @@ function finishGeneration(res, { html, issues, started, totalTokens, type, q, sl
   if (hasDoctype(html) && !hasClose(html) && html.length > 1500) html += '\n</body></html>';
   if (html.length > MAX_HTML_BYTES) html = html.slice(0, MAX_HTML_BYTES) + '\n</body></html>';
   const ok = hasDoctype(html) && hasClose(html) && issues.filter(i => i.includes('语法')).length === 0;
-  bumpStats(totalTokens);
+  bumpGens();   // 只计生成次数；token 已由 anthropicCall（快轨）或 runAgent（慢轨）accrue 入账，不在此重复
   logActivity('done', { mode: mode || 'fast', q: String(q || '').slice(0, 80), ok, secs: +secs.toFixed(1), tokens: totalTokens });
   let finalHtml = ok ? injectSys(html) : null;
   if (ok && type === 'search' && slug) saveApp({ slug, name: q, html: finalHtml, tokens: totalTokens, secs, mode });
@@ -571,7 +606,9 @@ async function runAgent(req, res, { q, slug, started, taskText, sessionTitle, pr
       done = true;
       const html = readAgentHtml();
       const issues = compileCheck(html);
-      const tokens = r?.info?.tokens ? (r.info.tokens.output || 0) + (r.info.tokens.input || 0) : 0;
+      const inTok = r?.info?.tokens?.input || 0, outTok = r?.info?.tokens?.output || 0;
+      accrue({ inTokens: inTok, outTokens: outTok });   // 慢轨走 opencode 不经 anthropicCall，单独入账（opencode 不分缓存）
+      const tokens = inTok + outTok;
       finishGeneration(res, { html, issues, started, totalTokens: tokens, type: 'search', q, slug, mode: 'deep' });
     } catch (e) {
       logActivity('agent_error', { q: String(q || '').slice(0, 80), msg: String(e?.message || e).slice(0, 100), timeout: !!e?.timeout });
@@ -772,8 +809,7 @@ const server = http.createServer((req, res) => {
       logActivity('cap_ai', { appName: String(b.appName || '').slice(0, 40), ip });
       capAiAsk(b.prompt, b.appName, (err, r) => {
         if (err) return json(res, 502, { error: '服务暂时不可用' });
-        dailyTokens += r.tokens || 0;       // 能力 AI 也计入日预算
-        json(res, 200, { text: r.text });
+        json(res, 200, { text: r.text });   // token 已在 anthropicCall→accrue 入账（含 dailyTokens），此处不再重复加
       });
     }).catch(e => json(res, 400, { error: e.message }));
     return;
@@ -888,6 +924,8 @@ const server = http.createServer((req, res) => {
   if (u.pathname === '/api/stats') {
     return json(res, 200, {
       apps: listApps().length, totalGens: stats.totalGens, totalTokens: stats.totalTokens, totalVisits: stats.totalVisits, model: MODEL,
+      tokens: { in: stats.inTokens, out: stats.outTokens, cacheRead: stats.cacheReadTokens, cacheCreate: stats.cacheCreateTokens },
+      cost: estCost(),   // null=未配置单价；单位元，仅含修复后分项统计
       live: {
         fastActive: genGate.active, fastQueue: genGate.pending, fastMax: GEN_CONCURRENCY,
         lanActive: lanGate.active, lanMax: LAN_GEN_CONCURRENCY,
@@ -942,8 +980,8 @@ server.listen(PORT, () => console.log(`现编OS 运行于 http://localhost:${POR
   } catch {}
 })();
 
-// 存量应用图标补齐：iconGate 串行慢速消化，重启只补缺失的
-setTimeout(() => {
+// 存量应用图标补齐：iconGate 串行慢速消化，重启只补缺失的（ICON_BACKFILL=0 关闭，供测试隔离）
+if (process.env.ICON_BACKFILL !== '0') setTimeout(() => {
   try {
     const missing = listApps().filter(a => !a.icon);
     if (missing.length) console.log(`[icon] 待补图标 ${missing.length} 个`);

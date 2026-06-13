@@ -106,6 +106,16 @@ Spotlight"完整版"（mode=deep）与缓存应用"修改"按钮走真正的 ope
 - **数据源**：主服务 `logActivity()` 落 `apps/activity.ndjson`（1MB 轮转），事件 visit/gen/done/modify/repair/cap_ai/cap_http/retry429/upstream_error/limited/blocked/busy；`/api/live` 加 visitors5m/todayGens/todayTokens
 - systemd：`deploy/improv-admin.service`（system 级，User 为部署用户）。鉴权 query/cookie/Bearer 三态 + timingSafeEqual；query 进来即种 HttpOnly cookie 并 302 清地址栏。
 
+## 计费系统重做（2026-06-14）
+
+修复前 token 统计三大盲点:快轨只记输出(`anthropicCall` 只取 `output_tokens`)、图标/审核完全没计、能力 AI 只进日预算不进总量——线上 36.9M 实为约一半真实量。重做为**统一入账**:
+- **`accrue(u)`** 集中累加,所有上游消耗都过它:`anthropicCall` 在 `r.on('end')` 解析 `message_start` 的 `input_tokens`/`cache_read`/`cache_creation` + `message_delta` 的 `output_tokens` 后 accrue(覆盖快轨续写修复 / 图标 / 审核 / 能力 AI);慢轨 opencode 在 `runAgent` 单独 accrue(不分缓存)。
+- **分四类存**:`stats.{inTokens,outTokens,cacheReadTokens,cacheCreateTokens}`,从修复点起精确;`totalTokens` 改为全量(in+out+cache)继续累加(历史段偏小属正常)。
+- **`bumpGens()`** 只在 `finishGeneration` 计生成次数,与 token 累加解耦(图标/审核不算"生成")。
+- **节流写盘**:`markStatsDirty` + 防抖 2s flush + 进程退出(SIGTERM/SIGINT/exit)flush,避免高频同步写阻塞事件循环。
+- **成本换算**:`.env` 配 `PRICE_{IN,OUT,CACHE_READ,CACHE_WRITE}_PER_M`(元/百万,留空不算),`estCost()` 保留完整精度、展示层舍入;`/api/stats` 暴露 `tokens`(四类)+ `cost`;运维面板加 4 个指标卡。
+- `ICON_BACKFILL=0` 关开机图标补齐(测试隔离用)。e2e:`tests/billing.e2e.test.mjs`(mock 带 usage 上游,断言四类分项精确入账 + 成本换算)。
+
 ## 浏览量 + 点赞（2026-06-13）
 
 - **浏览量**复用既有 `opens`（每次打开 +1，早已在索引），无新数据；只是把它和点赞做成可见的热度信号。
