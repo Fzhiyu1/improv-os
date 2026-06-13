@@ -36,7 +36,7 @@ before(async () => {
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
-  for (let i = 0; i < 50; i++) {               // 等服务就绪
+  for (let i = 0; i < 120; i++) {              // 等服务就绪（并发跑多个 e2e 时启动抢资源）
     try { await getStats(); return; } catch { await new Promise(r => setTimeout(r, 100)); }
   }
   throw new Error('服务未就绪');

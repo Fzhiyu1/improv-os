@@ -22,7 +22,7 @@ before(async () => {
     env: { ...process.env, PORT: String(APP_PORT), ANTHROPIC_AUTH_TOKEN: 'test-key', OC_PORT: '1' },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
-  for (let i = 0; i < 50; i++) {
+  for (let i = 0; i < 120; i++) {
     try { await get('/api/stats'); return; } catch { await new Promise(r => setTimeout(r, 100)); }
   }
   throw new Error('服务未就绪');

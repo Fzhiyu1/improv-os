@@ -9,7 +9,7 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
-const APP_PORT = 17314;
+const APP_PORT = 17315;
 const SLUG = 'aaaaaaaaaaaa';
 const APP_DIR = path.join(ROOT, 'apps', SLUG);
 let child;
@@ -41,7 +41,7 @@ before(async () => {
     env: { ...process.env, PORT: String(APP_PORT), ANTHROPIC_AUTH_TOKEN: 'test-key', OC_PORT: '1' },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
-  for (let i = 0; i < 50; i++) {
+  for (let i = 0; i < 120; i++) {   // 并发跑多个 e2e 时服务启动会抢资源，给足重试窗口
     try { await getJson('/api/stats'); return; } catch { await new Promise(r => setTimeout(r, 100)); }
   }
   throw new Error('服务未就绪');
