@@ -106,6 +106,13 @@ Spotlight"完整版"（mode=deep）与缓存应用"修改"按钮走真正的 ope
 - **数据源**：主服务 `logActivity()` 落 `apps/activity.ndjson`（1MB 轮转），事件 visit/gen/done/modify/repair/cap_ai/cap_http/retry429/upstream_error/limited/blocked/busy；`/api/live` 加 visitors5m/todayGens/todayTokens
 - systemd：`deploy/improv-admin.service`（system 级，User 为部署用户）。鉴权 query/cookie/Bearer 三态 + timingSafeEqual；query 进来即种 HttpOnly cookie 并 302 清地址栏。
 
+## 应用索引（2026-06-13）
+
+启动台/Spotlight"拉取应用很卡"定位：`listApps()` 每次请求全量同步扫盘（`readdirSync` + 每应用 2×`existsSync` + `readFileSync`，`1+3N` 次同步 FS 调用），单进程下阻塞事件循环、拖慢同期所有请求（含生成 SSE），随应用数线性恶化；且 `/api/apps`·`/api/search`·`/api/stats` 各扫一遍无缓存。
+- **改为内存索引**（`appIndex` Map: slug→meta 含 icon 布尔）：启动 `buildAppIndex()` 全量扫一次，此后增量维护——`saveApp` 落盘即 `indexApp(slug)`、`queueIcon` 写出图标即置 `icon=true`、`/api/app/:slug` 的 opens 自增同步内存（不重读盘）。请求路径零扫盘。
+- `listApps()` 改为返回 `[...appIndex.values()]`（新数组，元素为索引内 meta 引用——调用方只读/排序，勿改元素属性）。
+- 未做：接口分页 + 前端虚拟滚动（应用上规模再说，#1 已治本）。
+
 ## 结构
 
 - `web/` 前端壳（原生 TS/JS + CSS，不引框架）

@@ -358,6 +358,7 @@ function saveApp({ slug, name, html, tokens, secs, mode }) {
   try { const old = JSON.parse(fs.readFileSync(path.join(dir, 'meta.json'), 'utf8')); opens = old.opens || 0; createdAt = old.createdAt || createdAt; } catch {}
   fs.writeFileSync(path.join(dir, 'index.html'), html);
   fs.writeFileSync(path.join(dir, 'meta.json'), JSON.stringify({ name, slug, createdAt, updatedAt: new Date().toISOString(), tokens, secs, mode: mode || 'fast', opens }, null, 2));
+  indexApp(slug);          // 落盘即更新内存索引（创建或重新生成都覆盖）
   queueIcon(slug, name);   // 异步配一个 AI 设计的图标，不阻塞主流程
 }
 
@@ -382,6 +383,7 @@ function queueIcon(slug, name) {
         // 安全闸：SVG 经 <img> 引用不执行脚本，但仍拒绝一切可执行/外联痕迹
         if (svg && svg.length < 20000 && !/<script|<image|<foreignObject|<use|on\w+\s*=|javascript:|href\s*=/i.test(svg)) {
           fs.writeFileSync(f, svg);
+          const cur = appIndex.get(slug); if (cur) cur.icon = true;   // 图标就绪：启动台下次列出即用 <img>
           logActivity('icon', { slug, q: String(name).slice(0, 60) });
         }
       } catch {}
@@ -663,20 +665,27 @@ function repairApp(req, res, { name, html, error, lan }) {
 }
 
 // ---------- 应用缓存检索 ----------
-function listApps() {
-  const out = [];
-  for (const slug of fs.readdirSync(APPS_DIR)) {
-    const mp = path.join(APPS_DIR, slug, 'meta.json');
-    if (fs.existsSync(mp)) {
-      try {
-        const m = JSON.parse(fs.readFileSync(mp, 'utf8'));
-        m.icon = fs.existsSync(path.join(APPS_DIR, slug, 'icon.svg'));   // 有 AI 图标则前端用之
-        out.push(m);
-      } catch {}
-    }
-  }
-  return out;
+// 内存应用索引：slug -> meta（含 icon 布尔）。落盘时增量维护，避免每次 /api/apps·/api/search·/api/stats
+// 都全量同步扫盘——单进程下扫盘阻塞事件循环，会拖慢同期所有请求（含正在跑的生成 SSE），且随应用数线性恶化。
+const appIndex = new Map();
+function indexApp(slug) {
+  try {
+    const m = JSON.parse(fs.readFileSync(path.join(APPS_DIR, slug, 'meta.json'), 'utf8'));
+    m.icon = fs.existsSync(path.join(APPS_DIR, slug, 'icon.svg'));   // 有 AI 图标则前端用之
+    appIndex.set(slug, m);
+    return m;
+  } catch { appIndex.delete(slug); return null; }
 }
+function buildAppIndex() {
+  appIndex.clear();
+  let n = 0;
+  for (const slug of fs.readdirSync(APPS_DIR)) {
+    if (fs.existsSync(path.join(APPS_DIR, slug, 'meta.json'))) { indexApp(slug); n++; }
+  }
+  console.log(`[index] 应用索引就绪：${n} 个`);
+}
+// 返回索引快照（新数组，元素为索引内 meta 的引用——调用方只读/排序，勿改元素属性）
+function listApps() { return [...appIndex.values()]; }
 const slugify = q => crypto.createHash('sha1').update(q.trim().toLowerCase()).digest('hex').slice(0, 12);
 
 // ---------- HTTP 路由 ----------
@@ -827,7 +836,7 @@ const server = http.createServer((req, res) => {
     const dir = path.join(APPS_DIR, appMatch[1]);
     const f = path.join(dir, 'index.html');
     if (!fs.existsSync(f)) return json(res, 404, { error: 'not found' });
-    try { const m = JSON.parse(fs.readFileSync(path.join(dir, 'meta.json'), 'utf8')); m.opens = (m.opens || 0) + 1; fs.writeFileSync(path.join(dir, 'meta.json'), JSON.stringify(m, null, 2)); } catch {}
+    try { const m = JSON.parse(fs.readFileSync(path.join(dir, 'meta.json'), 'utf8')); m.opens = (m.opens || 0) + 1; fs.writeFileSync(path.join(dir, 'meta.json'), JSON.stringify(m, null, 2)); const idx = appIndex.get(appMatch[1]); if (idx) idx.opens = m.opens; } catch {}
     res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
     // 存量应用在落盘时还没有输入法守卫/localStorage 垫片，出口处补注（新应用已含，跳过）
     let appHtml = fs.readFileSync(f, 'utf8');
@@ -896,6 +905,7 @@ function readBody(req, limit = 200000) {
     req.on('end', () => { try { resolve(b ? JSON.parse(b) : {}); } catch { reject(new Error('请求格式错误')); } });
   });
 }
+buildAppIndex();   // 启动全量扫一次构建内存索引；此后增量维护，请求路径不再扫盘
 server.listen(PORT, () => console.log(`现编OS 运行于 http://localhost:${PORT}  模型=${MODEL} 限流=${RATE_PER_HOUR}/h`));
 
 // 启动清扫：进程被杀时 finally 不会执行，opencode 里会留下孤儿会话白吃内存。
