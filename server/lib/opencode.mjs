@@ -40,9 +40,9 @@ export async function createSession(dir, title = 'improv') {
   return r.id;
 }
 
-export function sendMessage(sid, dir, { text, system }) {
+export function sendMessage(sid, dir, { text, system, providerID, modelID }) {
   return ocRequest('POST', `/session/${sid}/message` + q(dir), {
-    model: { providerID: OC_PROVIDER, modelID: OC_MODEL },
+    model: { providerID: providerID || OC_PROVIDER, modelID: modelID || OC_MODEL },
     ...(system ? { system } : {}),
     parts: [{ type: 'text', text }],
   }, SEND_TIMEOUT_MS);

@@ -7,6 +7,9 @@ import { createWindow, focusedWindow, macAlert } from './wm.js';
 import { setMuted, isMuted } from './theater.js';
 import { UI } from './icons.js';
 
+let runtimeMode = 'normal';
+let runtimeModel = '';
+
 // ---------- 开机 ----------
 const boot = document.getElementById('boot');
 const bootBar = boot.querySelector('.boot-bar');
@@ -117,6 +120,7 @@ function renderSnd() { sndBtn.innerHTML = isMuted() ? UI.speakerMuted : UI.speak
 renderSnd();
 sndBtn.addEventListener('click', () => { setMuted(!isMuted()); renderSnd(); });
 document.getElementById('mb-spot').addEventListener('click', () => toggleSpotlight());
+syncRuntimeMode();
 
 // ---------- Dock ----------
 const dockIconsEl = document.getElementById('dock-icons');
@@ -210,6 +214,35 @@ async function openDeepLink() {
     }
     const m = await import('./apps.js');
     m.openSearchApp({ name: meta.name, slug, cached: true, meta });
+  } catch {}
+}
+
+async function syncRuntimeMode() {
+  try {
+    const s = await (await fetch('/api/stats', { cache: 'no-store' })).json();
+    const rt = s.runtime || {};
+    runtimeMode = rt.mode || 'normal';
+    runtimeModel = rt.resolvedModel || '';
+    // 只有 low_power 是「降级运行」状态需要提示用户；normal 和 ai_gateway 都是正常可用模式
+    // 非降级直接把节点从 DOM 删掉，避免在源码/截图/查元素里看到「低功率模式」字样和模型名 title
+    const isDegraded = runtimeMode === 'low_power';
+    const badge = document.getElementById('mb-mode');
+    if (badge) {
+      if (isDegraded) {
+        badge.hidden = false;
+        badge.removeAttribute('title');   // 不暴露模型名给用户
+      } else {
+        badge.remove();
+      }
+    }
+    if (isDegraded && !sessionStorage.getItem('xb-low-power-seen')) {
+      sessionStorage.setItem('xb-low-power-seen', '1');
+      macAlert({
+        title: '低功率运行中',
+        message: '现编引擎已切换到免费编剧池，生成速度会慢一些，但系统仍可继续创作。若只是想逛逛，应用程序里的馆藏作品照常开放。',
+        icon: UI.warning,
+      });
+    }
   } catch {}
 }
 

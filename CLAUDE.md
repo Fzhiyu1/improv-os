@@ -106,6 +106,10 @@ Spotlight"完整版"（mode=deep）与缓存应用"修改"按钮走真正的 ope
 - **数据源**：主服务 `logActivity()` 落 `apps/activity.ndjson`（1MB 轮转），事件 visit/gen/done/modify/repair/cap_ai/cap_http/retry429/upstream_error/limited/blocked/busy；`/api/live` 加 visitors5m/todayGens/todayTokens
 - systemd：`deploy/improv-admin.service`（system 级，User 为部署用户）。鉴权 query/cookie/Bearer 三态 + timingSafeEqual；query 进来即种 HttpOnly cookie 并 302 清地址栏。
 
+## 低功率模式（2026-06-14）
+
+当主模型成本太高时，`MODEL_MODE=low_power` 会把快轨与修复统一切到 OpenRouter 免费池（默认 `openrouter/free`），由 `OPENROUTER_API_KEY` 提供授权。`MODEL_MODE=normal` 切回现有 Anthropic 兼容主链路；运维面板可在线改 `.env` 并重启主服务，前端会显示“低功率模式”角标并在首次进入时弹公告。
+
 ## 计费系统重做（2026-06-14）
 
 修复前 token 统计三大盲点:快轨只记输出(`anthropicCall` 只取 `output_tokens`)、图标/审核完全没计、能力 AI 只进日预算不进总量——线上 36.9M 实为约一半真实量。重做为**统一入账**:

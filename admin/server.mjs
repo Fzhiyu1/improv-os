@@ -165,13 +165,16 @@ const CONTROLS = {
 
 // ---------- 可调参数白名单（写 .env，重启主服务生效）----------
 const CONF_KEYS = {
-  GEN_CONCURRENCY:    { min: 1, max: 50, def: 5, label: '快轨并发上限', hint: '同时打上游的生成数（保护上游网关）' },
-  GEN_QUEUE:          { min: 0, max: 200, def: 24, label: '快轨排队上限', hint: '超出直接回「人数较多」' },
-  DEEP_QUEUE:         { min: 0, max: 50, def: 8, label: '深轨排队上限', hint: '完整版/修改的等待队列' },
-  RATE_PER_HOUR:      { min: 1, max: 100000, def: 30, label: '每 IP 每小时', hint: '单人生成次数限制' },
-  DAILY_CAP:          { min: 1, max: 10000000, def: 3000, label: '全站每日次数', hint: '日熔断' },
-  DAILY_TOKEN_BUDGET: { min: 0, max: 1000000000, def: 0, label: '每日 token 预算', hint: '0=不限（合作期）' },
-  UPSTREAM_MAX_RETRY: { min: 0, max: 10, def: 5, label: '429 重试次数', hint: '上游限速退避重试' },
+  GEN_CONCURRENCY:    { min: 1, max: 50, def: 5, label: '快轨并发上限', hint: '同时打上游的生成数（保护上游网关）', kind: 'number' },
+  GEN_QUEUE:          { min: 0, max: 200, def: 24, label: '快轨排队上限', hint: '超出直接回「人数较多」', kind: 'number' },
+  DEEP_QUEUE:         { min: 0, max: 50, def: 8, label: '深轨排队上限', hint: '完整版/修改的等待队列', kind: 'number' },
+  RATE_PER_HOUR:      { min: 1, max: 100000, def: 30, label: '每 IP 每小时', hint: '单人生成次数限制', kind: 'number' },
+  DAILY_CAP:          { min: 1, max: 10000000, def: 3000, label: '全站每日次数', hint: '日熔断', kind: 'number' },
+  DAILY_TOKEN_BUDGET: { min: 0, max: 1000000000, def: 0, label: '每日 token 预算', hint: '0=不限（合作期）', kind: 'number' },
+  UPSTREAM_MAX_RETRY: { min: 0, max: 10, def: 5, label: '429 重试次数', hint: '上游限速退避重试', kind: 'number' },
+  MODEL_MODE:         { def: 'normal', label: '运行模式', hint: 'normal=公司网关；ai_gateway=ai.fzhiyu.dev（推荐，快且便宜）；low_power=OpenRouter 免费池', kind: 'enum', options: ['normal', 'ai_gateway', 'low_power'] },
+  AI_MODEL:           { def: 'gpt-5.3-codex-spark', label: 'AI 网关模型', hint: 'ai_gateway 模式用的模型 id（gpt-5.3-codex-spark 实测 533 tok/s）', kind: 'text' },
+  OPENROUTER_MODEL:   { def: 'openrouter/free', label: '低功率模型', hint: '默认用 OpenRouter 免费路由器；可替换为具体 free 模型 id', kind: 'text' },
 };
 function envValues() {
   const cur = {};
@@ -182,7 +185,10 @@ function envValues() {
     }
   } catch {}
   const out = {};
-  for (const [k, meta] of Object.entries(CONF_KEYS)) out[k] = { value: cur[k] !== undefined ? Number(cur[k]) : meta.def, ...meta };
+  for (const [k, meta] of Object.entries(CONF_KEYS)) {
+    const raw = cur[k] !== undefined ? cur[k] : meta.def;
+    out[k] = { value: meta.kind === 'number' ? Number(raw) : raw, ...meta };
+  }
   return out;
 }
 function setEnvKey(key, value) {
@@ -293,9 +299,21 @@ const server = http.createServer(async (req, res) => {
       for (const [k, v] of Object.entries(b.values || {})) {
         const meta = CONF_KEYS[k];
         if (!meta) continue;
-        const n = Math.round(Number(v));
-        if (!Number.isFinite(n) || n < meta.min || n > meta.max) return json(res, 400, { error: `${meta.label} 超出范围 [${meta.min}, ${meta.max}]` });
-        setEnvKey(k, n); applied.push(`${k}=${n}`);
+        if (meta.kind === 'number') {
+          const n = Math.round(Number(v));
+          if (!Number.isFinite(n) || n < meta.min || n > meta.max) return json(res, 400, { error: `${meta.label} 超出范围 [${meta.min}, ${meta.max}]` });
+          setEnvKey(k, n); applied.push(`${k}=${n}`);
+          continue;
+        }
+        if (meta.kind === 'enum') {
+          const s = String(v || '').trim();
+          if (!meta.options.includes(s)) return json(res, 400, { error: `${meta.label} 仅支持 ${meta.options.join('/')}` });
+          setEnvKey(k, s); applied.push(`${k}=${s}`);
+          continue;
+        }
+        const s = String(v || '').trim();
+        if (!s) return json(res, 400, { error: `${meta.label} 不能为空` });
+        setEnvKey(k, s); applied.push(`${k}=${s}`);
       }
       console.log(`[admin] 配置：${applied.join(' ')}`);
       let restarted = false;

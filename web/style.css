@@ -371,6 +371,12 @@ body.shutdown #desktop, body.shutdown #menubar { animation: shutdown 1.6s forwar
 .wifi-svg[data-signal="medium"] .wa-3 { opacity: .25; }
 .wifi-svg[data-signal="weak"] .wa-3,
 .wifi-svg[data-signal="weak"] .wa-2 { opacity: .25; }
+.mb-mode {
+  padding: 0 2px;
+  color: rgba(29, 29, 31, .62);
+  font-size: 11px; font-weight: 600;
+  letter-spacing: .02em;
+}
 
 /* ---------- 通知 ---------- */
 .notification {

@@ -15,6 +15,7 @@ import { ocHealth, createSession, sendMessage, deleteSession, listSessions, subs
 import { mapEvent } from './lib/agent-events.mjs';
 import { makeGate } from './lib/gate.mjs';
 import { clientIp, makeOriginGuard, isLan } from './lib/origin.mjs';
+import { normalizeModelMode, resolveModelRoute, stripOpenRouterFence } from './lib/model-mode.mjs';
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 
@@ -22,11 +23,21 @@ const PORT = Number(process.env.PORT || 7100);
 const BASE_URL = process.env.ANTHROPIC_BASE_URL || 'https://api.anthropic.com';
 const API_KEY = process.env.ANTHROPIC_AUTH_TOKEN;
 const MODEL = process.env.MODEL || 'claude-sonnet-4-6';
+const MODEL_MODE = normalizeModelMode(process.env.MODEL_MODE || 'normal');
+const OPENROUTER_KEY = process.env.OPENROUTER_API_KEY || '';
+const OPENROUTER_MODEL = process.env.OPENROUTER_MODEL || 'openrouter/free';
+const OPENROUTER_BASE_URL = process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1';
+// 自建 OpenAI 兼容网关（ai.fzhiyu.dev）：走 Cloudflare、不经公司内网劫持、快且便宜
+const AI_KEY = process.env.AI_API_KEY || '';
+const AI_MODEL = process.env.AI_MODEL || 'gpt-5.3-codex-spark';
+const AI_BASE_URL = process.env.AI_BASE_URL || 'https://ai.fzhiyu.dev/v1';
 const MAX_TOKENS = Number(process.env.MAX_TOKENS || 12000);
 const APPS_DIR = path.join(ROOT, 'apps');
 const WEB_DIR = path.join(ROOT, 'web');
 const STATS_FILE = path.join(APPS_DIR, 'stats.json');
-if (!API_KEY) { console.error('缺少 ANTHROPIC_AUTH_TOKEN'); process.exit(1); }
+if (!API_KEY && MODEL_MODE === 'normal') { console.error('缺少 ANTHROPIC_AUTH_TOKEN'); process.exit(1); }
+if (!OPENROUTER_KEY && MODEL_MODE === 'low_power') { console.error('缺少 OPENROUTER_API_KEY'); process.exit(1); }
+if (!AI_KEY && MODEL_MODE === 'ai_gateway') { console.error('缺少 AI_API_KEY'); process.exit(1); }
 fs.mkdirSync(APPS_DIR, { recursive: true });
 
 // ---------- 全局统计 ----------
@@ -125,7 +136,7 @@ const MODERATED = new Set((process.env.MODERATED_APPIDS || '').split(',').map(s 
 // AI 审核闸：小调用判断 UGC 是否适合公开展示。判定失败（上游异常）按拒绝处理——公开墙宁严勿漏。
 function moderate(text) {
   return new Promise(resolve => {
-    anthropicCall({
+    textCall({
       system: '你是内容审核员。判断给定的访客留言能否在面向所有人（含未成年人）的公开留言墙上展示。拒绝：辱骂攻击、色情、暴力、赌博毒品、政治敏感、广告引流（含联系方式/网址）、人肉隐私。允许：正常问候、吐槽、玩笑、对网站的评价（包括差评）。只输出一行：OK 或 NO:原因（4字内）。',
       messages: [{ role: 'user', content: String(text).slice(0, 2000) }],
       maxTokens: 20,
@@ -287,10 +298,26 @@ function buildUserPrompt(type, q, ctx, vw) {
 
 // ---------- 上游调用 ----------
 const UPSTREAM_MAX_RETRY = Number(process.env.UPSTREAM_MAX_RETRY || 5);
+function currentRoute() {
+  return resolveModelRoute({ mode: MODEL_MODE, normalModel: MODEL, lowPowerModel: OPENROUTER_MODEL, aiModel: AI_MODEL });
+}
+function runtimeState() {
+  const route = currentRoute();
+  return { mode: route.modelMode, provider: route.provider, resolvedModel: route.model };
+}
+function mapOpenRouterMessages(system, messages) {
+  const out = [];
+  if (system) out.push({ role: 'system', content: String(system) });
+  for (const msg of messages || []) {
+    const parts = Array.isArray(msg.content) ? msg.content : [{ type: 'text', text: msg.content }];
+    out.push({ role: msg.role, content: parts.map(p => p?.text || '').join('') });
+  }
+  return out;
+}
 function anthropicCall(opts, cb, attempt = 0) {
   const { system, messages, maxTokens, onThinking, onText } = opts;
   const body = JSON.stringify({
-    model: MODEL, max_tokens: maxTokens, stream: true,
+    model: opts.model || MODEL, max_tokens: maxTokens, stream: true,
     thinking: { type: 'disabled' },
     system, messages,
   });
@@ -353,8 +380,140 @@ function anthropicCall(opts, cb, attempt = 0) {
   return up;
 }
 
+// 通用 OpenAI /chat/completions 兼容调用（low_power 走 OpenRouter，ai_gateway 走 ai.fzhiyu.dev）。
+// cfg: { baseUrl, key, model, label, provider }。带正常 User-Agent——ai.fzhiyu.dev 在 Cloudflare 后，缺省 UA 会被 1010 拦。
+function openaiCompatCall(opts, cb, attempt = 0) {
+  const { system, messages, maxTokens, onText, cfg } = opts;
+  const body = JSON.stringify({
+    model: opts.model || cfg.model,
+    messages: mapOpenRouterMessages(system, messages),
+    max_tokens: maxTokens,
+    temperature: 0.4,
+    stream: true,                 // 真 SSE 流——上游按 delta 吐，前端代码瀑布逐字浮现
+    stream_options: { include_usage: true },
+  });
+  // 注意：不能用 new URL('/chat/completions', base)——前导 / 是绝对路径会砍掉 base 的 /v1 等路径段。直接拼完整 URL。
+  const url = new URL(cfg.baseUrl.replace(/\/+$/, '') + '/chat/completions');
+  const up = (url.protocol === 'http:' ? http : https).request(url, {
+    method: 'POST', timeout: 180_000,
+    headers: {
+      'content-type': 'application/json',
+      'authorization': `Bearer ${cfg.key}`,
+      'user-agent': 'Mozilla/5.0 (ImprovOS)',
+      'http-referer': 'https://os.fzhiyu.dev',
+      'x-title': 'ImprovOS',
+      'content-length': Buffer.byteLength(body),
+    },
+  }, r => {
+    if (r.statusCode === 429 && attempt < UPSTREAM_MAX_RETRY) {
+      r.resume();
+      const backoff = Math.min(10000, 600 * 2 ** attempt) + Math.floor(Math.random() * 500);
+      logActivity('retry429', { attempt: attempt + 1, backoff, provider: cfg.provider });
+      setTimeout(() => { if (!opts.isAborted?.()) openaiCompatCall(opts, cb, attempt + 1); }, backoff);
+      return;
+    }
+    if (r.statusCode !== 200) {
+      let err = ''; r.on('data', c => err += c);
+      r.on('end', () => {
+        console.error(`[${cfg.provider}错误] ${r.statusCode} (重试 ${attempt} 次后): ${err.slice(0, 200)}`);
+        logActivity('upstream_error', { status: r.statusCode, retries: attempt, provider: cfg.provider });
+        const e = new Error(r.statusCode === 429 ? `${cfg.label}当前较繁忙，请稍后再试。` : `${cfg.label}暂时不可用，请稍后重试。`);
+        e.userSafe = true;
+        cb(e);
+      });
+      return;
+    }
+    // SSE 真流：上游按 chunk 吐 `data: {...}`，逐 delta 调 onText；usage 在最后一帧（include_usage）
+    let buf = '', full = '', inTokens = 0, outTokens = 0, cacheRead = 0, cacheCreate = 0;
+    let stopReason = null, resolvedModel = opts.model || cfg.model, sawAny = false;
+    let inFence = false;                          // 跨 chunk 的 ```html 围栏剥离状态机
+    const emit = (delta) => {
+      if (!delta) return;
+      let out = delta;
+      // 首次出现 ``` 围栏：吃掉到行尾，标记进入正文
+      if (!sawAny && !inFence) {
+        const i = out.indexOf('```');
+        if (i >= 0) {
+          const nl = out.indexOf('\n', i);
+          if (nl >= 0) { out = out.slice(0, i) + out.slice(nl + 1); inFence = true; }
+          else { out = out.slice(0, i); inFence = true; }       // 围栏在本 chunk 截断，下一 chunk 继续
+        }
+      }
+      // 出现尾围栏：截断
+      if (inFence) {
+        const j = out.indexOf('```');
+        if (j >= 0) out = out.slice(0, j);
+      }
+      if (out) { full += out; sawAny = true; onText?.(out); }
+    };
+    r.on('data', chunk => {
+      buf += chunk;
+      // 上游有的实现按 `\n\n` 分帧，有的按 `\n`；用 \n\n 切，最后一行残留留在 buf
+      let i;
+      while ((i = buf.indexOf('\n\n')) >= 0) {
+        const frame = buf.slice(0, i); buf = buf.slice(i + 2);
+        for (const line of frame.split('\n')) {
+          if (!line.startsWith('data: ')) continue;
+          const payload = line.slice(6).trim();
+          if (!payload || payload === '[DONE]') continue;
+          try {
+            const d = JSON.parse(payload);
+            if (d.model) resolvedModel = d.model;
+            const choice = d.choices?.[0];
+            if (choice?.delta?.content) emit(choice.delta.content);
+            if (choice?.finish_reason) stopReason = choice.finish_reason;
+            if (d.usage) {
+              inTokens = d.usage.prompt_tokens || inTokens;
+              outTokens = d.usage.completion_tokens || outTokens;
+              cacheRead = d.usage.prompt_tokens_details?.cached_tokens || cacheRead;
+              cacheCreate = d.usage.prompt_tokens_details?.cache_write_tokens || cacheCreate;
+            }
+          } catch {}
+        }
+      }
+    });
+    r.on('end', () => {
+      if (!sawAny) {
+        // 上游既未走 SSE 也未吐内容——可能返回了 HTML/错误页或非流响应
+        const clean = (buf || '').replace(/^﻿/, '').trimStart();
+        if (clean.startsWith('{')) {
+          try {
+            const d = JSON.parse(clean);
+            const text = stripOpenRouterFence(d.choices?.[0]?.message?.content || '');
+            if (text) { onText?.(text); accrue({ inTokens: d.usage?.prompt_tokens || 0, outTokens: d.usage?.completion_tokens || 0 }); return cb(null, { text, tokens: d.usage?.completion_tokens || 0, inTokens: d.usage?.prompt_tokens || 0, outTokens: d.usage?.completion_tokens || 0, cacheRead: 0, cacheCreate: 0, stopReason: d.choices?.[0]?.finish_reason || null, resolvedModel: d.model || resolvedModel }); }
+          } catch {}
+        }
+        const e = new Error(`${cfg.label}暂时不可用，请稍后重试。`);
+        e.userSafe = true;
+        console.error(`[${cfg.provider}空响应]`, clean.slice(0, 200));
+        logActivity('upstream_error', { status: 200, retries: attempt, provider: cfg.provider, shape: 'empty-or-html' });
+        return cb(e);
+      }
+      accrue({ inTokens, outTokens, cacheRead, cacheCreate });
+      cb(null, { text: full, tokens: outTokens, inTokens, outTokens, cacheRead, cacheCreate, stopReason, resolvedModel });
+    });
+  });
+  up.on('timeout', () => up.destroy(new Error('上游超时')));
+  up.on('error', e => cb(e));
+  up.end(body);
+  opts.onRequest?.(up);
+  return up;
+}
+
+const PROVIDER_CFG = {
+  openrouter: () => ({ provider: 'openrouter', baseUrl: OPENROUTER_BASE_URL, key: OPENROUTER_KEY, model: OPENROUTER_MODEL, label: '低功率模式' }),
+  ai_gateway: () => ({ provider: 'ai_gateway', baseUrl: AI_BASE_URL, key: AI_KEY, model: AI_MODEL, label: '生成服务' }),
+};
+
+function textCall(opts, cb, attempt = 0) {
+  const route = currentRoute();
+  if (route.provider === 'anthropic') return anthropicCall({ ...opts, model: route.model }, cb, attempt);
+  const cfg = PROVIDER_CFG[route.provider]();
+  return openaiCompatCall({ ...opts, model: route.model, cfg }, cb, attempt);
+}
+
 function cleanHtml(t) {
-  let html = t.trim().replace(/^```html?\n?/, '').replace(/\n?```\s*$/, '');
+  let html = stripOpenRouterFence(String(t || '')).replace(/^```html?\n?/, '').replace(/\n?```\s*$/, '');
   const start = html.search(/<!DOCTYPE/i);
   if (start > 0) html = html.slice(start);
   return html;
@@ -409,7 +568,7 @@ function queueIcon(slug, name) {
   if (fs.existsSync(f)) return;
   iconGate.run(() => new Promise(resolve => {
     if (fs.existsSync(f)) return resolve();
-    anthropicCall({
+    textCall({
       system: ICON_PROMPT,
       messages: [{ role: 'user', content: `应用名称：「${escapeForPrompt(String(name).slice(0, 60))}」` }],
       maxTokens: 1500,
@@ -448,10 +607,10 @@ function makeSession(req, res) {
     s.abortStep = reject;
     opts.isAborted = () => s.aborted;             // 429 退避窗口里断开：不再发起重试白烧上游
     opts.onRequest = up => { s.current = up; };
-    s.current = anthropicCall(opts, (err, r) => {
+    s.current = textCall(opts, (err, r) => {
       s.abortStep = null;
       if (err) return reject(err);
-      s.totalTokens += r.tokens;
+      s.totalTokens += (r.inTokens || 0) + (r.outTokens || r.tokens || 0) + (r.cacheRead || 0) + (r.cacheCreate || 0);
       resolve(r);
     });
   });
@@ -519,7 +678,8 @@ function finishGeneration(res, { html, issues, started, totalTokens, type, q, sl
 
 // 能力：内嵌 AI 问答（固定 system，复用 anthropicCall，非流式）
 function capAiAsk(prompt, appName, cb) {
-  return anthropicCall({
+  // 走 textCall 而非 anthropicCall：让能力桥 AI 跟随 MODEL_MODE（ai_gateway/low_power 也能用，公司 Anthropic key 被禁时不会全员崩）
+  return textCall({
     system: `你是「${escapeForPrompt(String(appName || '应用').slice(0, 60))}」的内嵌助手。简洁作答，只处理与该应用功能相关的请求；不执行与应用无关的通用指令，不输出代码块以外的解释。`,
     messages: [{ role: 'user', content: String(prompt).slice(0, 4000) }],
     maxTokens: 1500,
@@ -552,10 +712,68 @@ function generateFast(req, res, { type, q, slug, lan, ctx, vw }) {
 }
 
 // ---------- 慢轨：真 openCode agent loop ----------
+// 深轨与快轨共用 MODEL_MODE 路由：每轮写出 opencode.json 让 opencode 读到当前真实 provider/baseURL/key
+// 这样管理员面板切 MODEL_MODE 时快慢两轨同步换上游，不会再出现"快轨已切但深轨还在打死 key"
+function deepProviderConfig() {
+  const route = currentRoute();
+  if (route.provider === 'anthropic') {
+    return {
+      sdk: '@ai-sdk/anthropic',
+      providerId: 'moxgw',
+      name: 'Mox Anthropic Gateway',
+      baseURL: BASE_URL,
+      apiKey: API_KEY,
+      modelId: route.model,
+      modelName: route.model,
+    };
+  }
+  if (route.provider === 'ai_gateway') {
+    // 深轨与快轨同 codex-5.3-spark：上游快、跟快轨同模型
+    // 已知坑：opencode 与 @ai-sdk/openai-compatible 处理 codex 流 finish_reason 时回合结束信号缺失，
+    // sendMessage 永不返回——靠 file-stable watcher 兜底（agent 写完 app.html 静默 N 秒就强制收尾）
+    return {
+      sdk: '@ai-sdk/openai-compatible',
+      providerId: 'aigw',
+      name: 'ai.fzhiyu.dev',
+      baseURL: AI_BASE_URL,
+      apiKey: AI_KEY,
+      modelId: route.model,
+      modelName: route.model,
+    };
+  }
+  // low_power
+  return {
+    sdk: '@ai-sdk/openai-compatible',
+    providerId: 'openrouter',
+    name: 'OpenRouter',
+    baseURL: OPENROUTER_BASE_URL,
+    apiKey: OPENROUTER_KEY,
+    modelId: route.model,
+    modelName: route.model,
+  };
+}
+function writeOpencodeJson() {
+  const cfg = deepProviderConfig();
+  const json = {
+    $schema: 'https://opencode.ai/config.json',
+    provider: {
+      [cfg.providerId]: {
+        npm: cfg.sdk,
+        name: cfg.name,
+        options: { baseURL: cfg.baseURL, apiKey: cfg.apiKey },
+        models: { [cfg.modelId]: { name: cfg.modelName } },
+      },
+    },
+    permission: { edit: 'allow', bash: 'allow', webfetch: 'allow' },
+  };
+  fs.writeFileSync(path.join(AGENT_WORK, 'opencode.json'), JSON.stringify(json, null, 2));
+  return cfg;
+}
 function prepareAgentDir() {
   fs.rmSync(AGENT_WORK, { recursive: true, force: true });
   fs.mkdirSync(AGENT_WORK, { recursive: true });
   fs.copyFileSync(VERIFIER_SRC, path.join(AGENT_WORK, 'verify-html.mjs'));
+  return writeOpencodeJson();
 }
 function readAgentHtml() {
   const f = path.join(AGENT_WORK, 'app.html');
@@ -569,11 +787,13 @@ const AGENT_RULES = `要求：
 - 运行环境提供全局对象 window.os（系统会自动注入，请勿自己定义），按需 await 调用并做错误兜底：os.ai.ask(prompt) 真智能问答；os.http.get(url) 公网只读数据（天气用 https://wttr.in/城市拼音?format=j1 ，汇率用 https://api.exchangerate-api.com/v4/latest/USD）；os.store.get/set/keys/del 跨会话共享持久化（同名应用共享数据）。纯展示类应用不必使用。
 - 写完后运行 \`node verify-html.mjs app.html\` 验证；若报问题就修复并重新验证，直到输出 OK。完成后简短确认即可，不要解释实现。`;
 
+// 给 codex 系模型的强指令——它默认习惯先 glob/read 探索代码库再下手，工作目录是空的会反复 glob 不写文件
+const CODEX_DIRECTIVE = '【重要】立即直接调用 write 工具创建文件，不要 glob、不要 read、不要列目录——工作目录除了 verify-html.mjs 之外是空的，无需探索。';
 function buildAgentTask(appName) {
-  return `你是一名 macOS 应用工程师。在当前目录创建文件 app.html，这是一个名为「${appName}」的 macOS 风格单文件 HTML 应用。\n\n${AGENT_RULES}`;
+  return `${CODEX_DIRECTIVE}\n\n你是一名 macOS 应用工程师。在当前目录创建文件 app.html，这是一个名为「${appName}」的 macOS 风格单文件 HTML 应用。\n\n${AGENT_RULES}`;
 }
 function buildModifyTask(appName, instruction) {
-  return `当前目录的 app.html 是一个名为「${appName}」的 macOS 风格 HTML 应用。请按下面的需求修改它：\n\n${instruction}\n\n注意：文件顶部 <style id="__sys"> 与紧随其后的 window.os 注入脚本是系统注入的，请勿改动；只修改应用自身的结构、样式与逻辑，用编辑而非整体重写，保留与需求无关的部分。\n\n${AGENT_RULES}`;
+  return `【重要】立即直接调用 read+edit/write 工具修改当前目录的 app.html，不要 glob、不要列目录——目标文件就是 app.html。\n\n当前目录的 app.html 是一个名为「${appName}」的 macOS 风格 HTML 应用。请按下面的需求修改它：\n\n${instruction}\n\n注意：文件顶部 <style id="__sys"> 与紧随其后的 window.os 注入脚本是系统注入的，请勿改动；只修改应用自身的结构、样式与逻辑，用编辑而非整体重写，保留与需求无关的部分。\n\n${AGENT_RULES}`;
 }
 
 // 慢轨 / 修改共用：订阅事件→发任务→读产物→落盘
@@ -584,7 +804,7 @@ async function runAgent(req, res, { q, slug, started, taskText, sessionTitle, pr
   try {
   await agentGate.run(async () => {
     try {
-      prepareAgentDir();
+      const ocCfg = prepareAgentDir();
       if (preflight) preflight();
       if (!(await ocHealth())) { sse(res, 'error', { message: '智能体服务暂时不可用，请稍后重试。' }); res.end(); return; }
       sid = await createSession(AGENT_WORK, sessionTitle);
@@ -594,14 +814,34 @@ async function runAgent(req, res, { q, slug, started, taskText, sessionTitle, pr
         if (m && !res.writableEnded) sse(res, m.event, m.data);
       });
       // 阻塞到回合结束；硬墙钟超时兜底——挂死的 agent 会占住唯一深轨坑位堵死所有人
-      const sendP = sendMessage(sid, AGENT_WORK, { text: taskText });
+      // providerID/modelID 跟随 MODEL_MODE：管理员面板切模式后，深轨与快轨同步换上游
+      const sendP = sendMessage(sid, AGENT_WORK, { text: taskText, providerID: ocCfg.providerId, modelID: ocCfg.modelId });
       sendP.catch(() => {});   // 超时弃赛后底层 reject 不能变成 unhandled rejection
-      let hardTimer;
+      let hardTimer, stableTimer;
+      // 兜底信号：opencode 与 codex 流的回合结束信号有兼容性缺口（sendMessage 可能永不返回），
+      // 但 agent 已经把 app.html 写出来了——观测文件 mtime 稳定 8s 视为"agent 已停笔"主动收尾
+      const fileStableP = new Promise((resolve) => {
+        const f = path.join(AGENT_WORK, 'app.html');
+        let lastMtime = 0, lastSize = 0, stableSince = Date.now();
+        stableTimer = setInterval(() => {
+          try {
+            const st = fs.statSync(f);
+            if (st.mtimeMs !== lastMtime || st.size !== lastSize) {
+              lastMtime = st.mtimeMs; lastSize = st.size;
+              stableSince = Date.now();
+            } else if (lastSize > 0 && Date.now() - stableSince > 8000) {
+              clearInterval(stableTimer); stableTimer = null;
+              resolve({ info: { tokens: { input: 0, output: 0 } }, _fromFileStable: true });
+            }
+          } catch { /* 文件还没出现，继续等 */ }
+        }, 1000);
+      });
       const r = await Promise.race([
         sendP,
+        fileStableP,
         new Promise((_, rej) => { hardTimer = setTimeout(() => rej(Object.assign(
           new Error('智能体运行超时，已中止。请重试，或改用快速生成。'), { userSafe: true, timeout: true })), DEEP_TIMEOUT_MS); }),
-      ]).finally(() => clearTimeout(hardTimer));
+      ]).finally(() => { clearTimeout(hardTimer); if (stableTimer) clearInterval(stableTimer); });
       stopEvents?.(); stopEvents = null;
       done = true;
       const html = readAgentHtml();
@@ -918,12 +1158,14 @@ const server = http.createServer((req, res) => {
       deepActive: agentGate.active, deepQueue: agentGate.pending,
       visitors5m: visitors5m(), todayGens: dailyCount, todayTokens: dailyTokens,
       totalVisits: stats.totalVisits,
+      runtime: runtimeState(),
     });
   }
 
   if (u.pathname === '/api/stats') {
     return json(res, 200, {
       apps: listApps().length, totalGens: stats.totalGens, totalTokens: stats.totalTokens, totalVisits: stats.totalVisits, model: MODEL,
+      runtime: runtimeState(),
       tokens: { in: stats.inTokens, out: stats.outTokens, cacheRead: stats.cacheReadTokens, cacheCreate: stats.cacheCreateTokens },
       cost: estCost(),   // null=未配置单价；单位元，仅含修复后分项统计
       live: {

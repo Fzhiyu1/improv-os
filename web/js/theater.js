@@ -272,8 +272,10 @@ function showError(win, message, detail) {
       <div class="app-error-title"></div>
       <div class="app-error-msg"></div>
     </div>`;
-  win.body.querySelector('.app-error-title').textContent = message;
-  win.body.querySelector('.app-error-msg').textContent = detail || '';
+  const title = String(message || '无法打开此应用');
+  const msg = String(detail || '请稍后再试。');
+  win.body.querySelector('.app-error-title').textContent = title;
+  win.body.querySelector('.app-error-msg').textContent = title.includes('低功率') ? msg || '当前为低功率运行模式，免费编剧池稍后再试。' : msg;
   return true;
 }
 
