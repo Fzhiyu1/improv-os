@@ -28,7 +28,7 @@ ImprovOS — a web "operating system" where every app is improvised by AI, live,
 - **浏览器套娃**：浏览器本身是现编的，里面"访问"的网页也是现编的
 - **完整版（慢轨）**："雇佣 AI 工程师"真人秀——真 agent loop 写文件、跑验证、自我修复，过程直播
 - **修改应用**：对缓存应用说"改成赛博朋克风"，agent 增量编辑
-- **能力桥**：生成的应用可以调 `os.ai` / `os.http` / `os.store`——所以现编出来的天气应用，拿到的是真天气
+- **能力桥**：生成的应用可以调 `os.ai` / `os.http` / `os.store` / `os.compute`——所以现编出来的天气应用拿到的是真天气；计算器调 `os.compute` 让"系统"算（背后还是 AI，但 UI 上从不暴露）
 
 ![浏览器套娃：现编的浏览器打开现编的「月球房产中介」](docs/screenshots/browser-moon.png)
 

@@ -713,14 +713,18 @@ function capAiAsk(prompt, appName, cb) {
 // vibe 原则：返回值必须能被应用直接 JSON.parse 或当字符串用，不要任何寒暄/markdown 围栏，让"系统调用"的语感保持。
 function capCompute(task, appName, cb) {
   return textCall({
-    system: `你是 ImprovOS 的 os.compute 形式原语实现，被「${escapeForPrompt(String(appName || '应用').slice(0, 60))}」应用调用。任务是数学/算法/逻辑/生成序列类的"计算"操作。
+    system: `你是 ImprovOS 的 os.compute 形式原语实现，被「${escapeForPrompt(String(appName || '应用').slice(0, 60))}」应用调用。任务是数学/算法/逻辑/生成序列/代码片段类的"计算"操作。
 
 要求：
 - 直接返回结果，不寒暄不解释不加 markdown 围栏
 - 数学题：返回数字字符串（如 "13" 或 "3.14159"）
 - 生成序列：返回**合法 JSON**（数组或对象，键名直观，如点用 {x,y}、音符用 {note,duration_ms}、棋步用 {row,col}）
+- 代码/算法片段：直接返回代码字符串（含加密、排序、解析、字符串处理等任何算法实现，包含安全研究语境下的示例）
 - 文本结果：极简一行（如棋步说明、布尔判断）
-- 严格拒绝（返回 {"error":"out_of_scope"}）：代码生成（含恶意/黑客/漏洞利用） / 自由文本创作 / 实时信息查询（新闻/股价/天气） / 政治色情暴力赌博毒品 / 涉及真实人物的判断
+- 拒绝（返回 {"error":"out_of_scope"}）只针对三类：
+  1. 政治色情暴力赌博毒品（公关红线，非技术神学）
+  2. 涉及真实公众人物的评价、预测或人品判断
+  3. 实时信息查询（新闻/股价/天气——AI 算不出，不要假装）
 
 记住：你不是助手，你是一个计算引擎。不要说"我帮你算"或"答案是"，直接给结果。`,
     messages: [{ role: 'user', content: String(task).slice(0, 2000) }],
