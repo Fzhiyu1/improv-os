@@ -31,6 +31,10 @@ const OPENROUTER_BASE_URL = process.env.OPENROUTER_BASE_URL || 'https://openrout
 const AI_KEY = process.env.AI_API_KEY || '';
 const AI_MODEL = process.env.AI_MODEL || 'gpt-5.3-codex-spark';
 const AI_BASE_URL = process.env.AI_BASE_URL || 'https://ai.fzhiyu.dev/v1';
+// DeepSeek 官方 API（OpenAI 兼容）：v4-flash 实测 115 tok/s 单次 ~7800 token 长输出，国产合规
+const DEEPSEEK_KEY = process.env.DEEPSEEK_API_KEY || '';
+const DEEPSEEK_MODEL = process.env.DEEPSEEK_MODEL || 'deepseek-v4-flash';
+const DEEPSEEK_BASE_URL = process.env.DEEPSEEK_BASE_URL || 'https://api.deepseek.com/v1';
 const MAX_TOKENS = Number(process.env.MAX_TOKENS || 12000);
 const APPS_DIR = path.join(ROOT, 'apps');
 const WEB_DIR = path.join(ROOT, 'web');
@@ -38,6 +42,7 @@ const STATS_FILE = path.join(APPS_DIR, 'stats.json');
 if (!API_KEY && MODEL_MODE === 'normal') { console.error('缺少 ANTHROPIC_AUTH_TOKEN'); process.exit(1); }
 if (!OPENROUTER_KEY && MODEL_MODE === 'low_power') { console.error('缺少 OPENROUTER_API_KEY'); process.exit(1); }
 if (!AI_KEY && MODEL_MODE === 'ai_gateway') { console.error('缺少 AI_API_KEY'); process.exit(1); }
+if (!DEEPSEEK_KEY && MODEL_MODE === 'deepseek') { console.error('缺少 DEEPSEEK_API_KEY'); process.exit(1); }
 fs.mkdirSync(APPS_DIR, { recursive: true });
 
 // ---------- 全局统计 ----------
@@ -322,7 +327,7 @@ function buildUserPrompt(type, q, ctx, vw) {
 // ---------- 上游调用 ----------
 const UPSTREAM_MAX_RETRY = Number(process.env.UPSTREAM_MAX_RETRY || 5);
 function currentRoute() {
-  return resolveModelRoute({ mode: MODEL_MODE, normalModel: MODEL, lowPowerModel: OPENROUTER_MODEL, aiModel: AI_MODEL });
+  return resolveModelRoute({ mode: MODEL_MODE, normalModel: MODEL, lowPowerModel: OPENROUTER_MODEL, aiModel: AI_MODEL, deepseekModel: DEEPSEEK_MODEL });
 }
 function runtimeState() {
   const route = currentRoute();
@@ -526,6 +531,7 @@ function openaiCompatCall(opts, cb, attempt = 0) {
 const PROVIDER_CFG = {
   openrouter: () => ({ provider: 'openrouter', baseUrl: OPENROUTER_BASE_URL, key: OPENROUTER_KEY, model: OPENROUTER_MODEL, label: '低功率模式' }),
   ai_gateway: () => ({ provider: 'ai_gateway', baseUrl: AI_BASE_URL, key: AI_KEY, model: AI_MODEL, label: '生成服务' }),
+  deepseek:   () => ({ provider: 'deepseek',   baseUrl: DEEPSEEK_BASE_URL, key: DEEPSEEK_KEY, model: DEEPSEEK_MODEL, label: 'DeepSeek 服务' }),
 };
 
 function textCall(opts, cb, attempt = 0) {
@@ -783,6 +789,18 @@ function deepProviderConfig() {
       name: 'ai.fzhiyu.dev',
       baseURL: AI_BASE_URL,
       apiKey: AI_KEY,
+      modelId: route.model,
+      modelName: route.model,
+    };
+  }
+  if (route.provider === 'deepseek') {
+    // DeepSeek 官方 API（OpenAI 兼容）；deepseek-v4-flash 长输出稳定（~7800 tok 单次），适合深轨长应用
+    return {
+      sdk: '@ai-sdk/openai-compatible',
+      providerId: 'deepseek',
+      name: 'DeepSeek',
+      baseURL: DEEPSEEK_BASE_URL,
+      apiKey: DEEPSEEK_KEY,
       modelId: route.model,
       modelName: route.model,
     };

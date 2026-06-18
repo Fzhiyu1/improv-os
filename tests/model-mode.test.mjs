@@ -6,6 +6,7 @@ test('normalizeModelMode falls back to normal', () => {
   assert.strictEqual(normalizeModelMode('normal'), 'normal');
   assert.strictEqual(normalizeModelMode('low_power'), 'low_power');
   assert.strictEqual(normalizeModelMode('ai_gateway'), 'ai_gateway');
+  assert.strictEqual(normalizeModelMode('deepseek'), 'deepseek');
   assert.strictEqual(normalizeModelMode('weird'), 'normal');
   assert.strictEqual(normalizeModelMode(''), 'normal');
 });
@@ -19,6 +20,13 @@ test('resolveModelRoute maps modes to providers', () => {
   });
   assert.deepStrictEqual(resolveModelRoute({ mode: 'ai_gateway', normalModel: 'claude-sonnet-4-6', aiModel: 'gpt-5.3-codex-spark' }), {
     provider: 'ai_gateway', modelMode: 'ai_gateway', model: 'gpt-5.3-codex-spark'
+  });
+  assert.deepStrictEqual(resolveModelRoute({ mode: 'deepseek', normalModel: 'claude-sonnet-4-6', deepseekModel: 'deepseek-v4-flash' }), {
+    provider: 'deepseek', modelMode: 'deepseek', model: 'deepseek-v4-flash'
+  });
+  // 默认 deepseek 模型
+  assert.deepStrictEqual(resolveModelRoute({ mode: 'deepseek', normalModel: 'claude-sonnet-4-6' }), {
+    provider: 'deepseek', modelMode: 'deepseek', model: 'deepseek-v4-flash'
   });
 });
 
